@@ -1,18 +1,21 @@
-"""The three valid detector result states."""
+"""Fired, clear, and skipped detector result states."""
 
 from dataclasses import dataclass, field
-from typing import Union
+from typing import Generic, TypeVar
 
-from .enums import DetectorName, DetectorStatus
-from .findings import Finding
+from ..enums import DetectorName, DetectorStatus
+from ..findings import Finding
+from .base import DetectorResult
+
+
+T = TypeVar("T", bound=Finding, covariant=True)
 
 
 @dataclass(frozen=True)
-class FiredResult:
-    """A detector ran and emitted a finding."""
+class FiredResult(DetectorResult, Generic[T]):
+    """A detector ran and emitted a typed finding."""
 
-    detector: DetectorName
-    finding: Finding
+    finding: T
     status: DetectorStatus = field(default=DetectorStatus.FIRED, init=False)
 
     def __post_init__(self) -> None:
@@ -21,24 +24,19 @@ class FiredResult:
 
 
 @dataclass(frozen=True)
-class ClearResult:
+class ClearResult(DetectorResult):
     """A detector ran and did not find its target condition."""
 
-    detector: DetectorName
     status: DetectorStatus = field(default=DetectorStatus.CLEAR, init=False)
 
 
 @dataclass(frozen=True)
-class SkippedResult:
+class SkippedResult(DetectorResult):
     """A detector could not run because required evidence was unavailable."""
 
-    detector: DetectorName
     reason: str
     status: DetectorStatus = field(default=DetectorStatus.SKIPPED, init=False)
 
     def __post_init__(self) -> None:
         if not self.reason.strip():
             raise ValueError("skipped result requires a reason")
-
-
-DetectorResult = Union[FiredResult, ClearResult, SkippedResult]

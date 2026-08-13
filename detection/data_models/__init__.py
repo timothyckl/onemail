@@ -33,7 +33,12 @@ from .observables import (
     SenderIp,
 )
 from .outcome import MessageDetection
-from .results import ClearResult, DetectorResult, FiredResult, SkippedResult
+from .results import (
+    ClearResult,
+    DetectorResult,
+    FiredResult,
+    SkippedResult,
+)
 
 __all__ = [
     "AttachmentClass",

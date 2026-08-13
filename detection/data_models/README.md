@@ -1,4 +1,4 @@
-# Data Models
+# Detection Models
 
 Standalone, stdlib-only dataclasses for deterministic email detection.
 
@@ -19,8 +19,10 @@ The package defines data models only. It does not parse email, run detectors, or
 - `input.py`: raw email input
 - `observables.py`: facts extracted from email bytes
 - `evidence.py`: detector-specific evidence
-- `findings.py`: detector-specific findings
-- `results.py`: fired, clear, and skipped outcomes
+- `findings/base.py`: shared finding base
+- `findings/findings.py`: detector-specific findings
+- `results/base.py`: common `DetectorResult` base
+- `results/results.py`: fired, clear, and skipped outcomes
 - `outcome.py`: final per-message detection result
 
 ## Invariants
@@ -35,7 +37,7 @@ The package defines data models only. It does not parse email, run detectors, or
 ## Example
 
 ```python
-from data_models import (
+from detection_models import (
     ClearResult,
     DetectorName,
     MessageDetection,
