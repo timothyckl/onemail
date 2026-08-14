@@ -2,7 +2,7 @@
 
 from typing import Iterable, Optional, Tuple
 
-from ..data_models import Detection, DetectorResult, Email
+from .data_models import Detection, DetectorResult, Email
 
 from .detectors import DEFAULT_DETECTORS, Detector
 from .parser import EmailParser

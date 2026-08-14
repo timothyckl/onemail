@@ -26,8 +26,8 @@ from detection.data_models import (
     Severity,
     SpfResult,
 )
-from detection.detection.detectors.detectors import CREDENTIAL_LANGUAGE, URGENCY_LANGUAGE
-from detection.detection.detectors.extra_detectors import EXTRA_DETECTORS
+from detection.detectors.detectors import CREDENTIAL_LANGUAGE, URGENCY_LANGUAGE
+from detection.detectors.extra_detectors import EXTRA_DETECTORS
 
 
 @dataclass(frozen=True)

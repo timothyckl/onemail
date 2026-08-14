@@ -2,7 +2,7 @@
 
 from typing import Final, Optional, Sequence, Tuple, Union
 
-from ...data_models import (
+from ..data_models import (
     AuthFailureEvidence,
     AuthFailureFinding,
     BecNoPayloadEvidence,

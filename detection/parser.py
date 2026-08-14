@@ -8,7 +8,7 @@ from email.message import Message
 from email.utils import parsedate_to_datetime
 from typing import Final, Iterable, Optional, Set, Tuple
 
-from ..data_models import (
+from .data_models import (
     AttachmentClass,
     AttachmentObservable,
     DmarcResult,

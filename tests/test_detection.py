@@ -5,7 +5,7 @@ from email.message import EmailMessage
 from typing import Optional
 
 from detection import DetectionEngine, EmailParser
-from detection.detection.detectors import (
+from detection.detectors import (
     AuthFailureDetector,
     BecNoPayloadDetector,
     CredentialUrlDetector,
@@ -229,7 +229,7 @@ class DetectorTests(unittest.TestCase):
 
 class ExtraDetectorTests(unittest.TestCase):
     def test_dangerous_attachment_fires_on_executable(self) -> None:
-        from detection.detection.detectors import DangerousAttachmentDetector
+        from detection.detectors import DangerousAttachmentDetector
         from detection.data_models import AttachmentObservable
 
         exe = AttachmentObservable(
@@ -247,7 +247,7 @@ class ExtraDetectorTests(unittest.TestCase):
         self.assertIsInstance(skipped, SkippedResult)
 
     def test_extension_spoof_fires_on_double_extension(self) -> None:
-        from detection.detection.detectors import AttachmentExtensionSpoofDetector
+        from detection.detectors import AttachmentExtensionSpoofDetector
         from detection.data_models import AttachmentObservable
 
         spoof = AttachmentObservable(
@@ -263,7 +263,7 @@ class ExtraDetectorTests(unittest.TestCase):
         self.assertIsInstance(fired, FiredResult)
 
     def test_raw_ip_url_fires(self) -> None:
-        from detection.detection.detectors import RawIpUrlDetector
+        from detection.detectors import RawIpUrlDetector
 
         fired = RawIpUrlDetector().detect(
             MessageObservables(
@@ -279,7 +279,7 @@ class ExtraDetectorTests(unittest.TestCase):
         self.assertIsInstance(skipped, SkippedResult)
 
     def test_lookalike_domain_fires_on_typosquat_and_punycode(self) -> None:
-        from detection.detection.detectors import LookalikeDomainDetector
+        from detection.detectors import LookalikeDomainDetector
 
         typo = LookalikeDomainDetector().detect(
             MessageObservables(url_hosts=("paypa1.com",))
@@ -295,7 +295,7 @@ class ExtraDetectorTests(unittest.TestCase):
         self.assertIsInstance(clear, ClearResult)
 
     def test_high_abuse_tld_requires_language(self) -> None:
-        from detection.detection.detectors import HighAbuseTldDetector
+        from detection.detectors import HighAbuseTldDetector
 
         fired = HighAbuseTldDetector().detect(
             MessageObservables(
@@ -315,7 +315,7 @@ class ExtraDetectorTests(unittest.TestCase):
         self.assertIsInstance(clear, ClearResult)
 
     def test_private_sender_ip_only_when_no_public_ip(self) -> None:
-        from detection.detection.detectors import PrivateSenderIpDetector
+        from detection.detectors import PrivateSenderIpDetector
         from detection.data_models import SenderIp
 
         only_private = PrivateSenderIpDetector().detect(
@@ -333,7 +333,7 @@ class ExtraDetectorTests(unittest.TestCase):
         self.assertIsInstance(mixed, ClearResult)
 
     def test_image_only_body_fires(self) -> None:
-        from detection.detection.detectors import ImageOnlyBodyDetector
+        from detection.detectors import ImageOnlyBodyDetector
 
         fired = ImageOnlyBodyDetector().detect(
             MessageObservables(

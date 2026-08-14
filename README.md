@@ -5,7 +5,7 @@ OneMail performs deterministic email threat detection followed by deeper agentic
 ## Architecture
 
 - `detection/data_models/` defines detection data models.
-- `detection/detection/` parses emails and applies deterministic rules.
+- `detection/` parses emails and applies deterministic rules.
 - `agentic/` investigates emails already classified as malicious.
 - `tests/` contains the project test suite.
 
