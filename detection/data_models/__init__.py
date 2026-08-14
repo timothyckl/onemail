@@ -24,7 +24,7 @@ from .findings import (
     Finding,
     ReplyToDivergenceFinding,
 )
-from .input import EmailInput
+from .email import Email
 from .observables import (
     AttachmentObservable,
     DuplicateHeader,
@@ -32,7 +32,7 @@ from .observables import (
     NestedSender,
     SenderIp,
 )
-from .outcome import MessageDetection
+from .detection import Detection
 from .results import (
     ClearResult,
     DetectorResult,
@@ -58,10 +58,10 @@ __all__ = [
     "DisplayNameSpoofFinding",
     "DmarcResult",
     "DuplicateHeader",
-    "EmailInput",
+    "Email",
     "Finding",
     "FiredResult",
-    "MessageDetection",
+    "Detection",
     "MessageObservables",
     "NestedSender",
     "ReplyToDivergenceEvidence",

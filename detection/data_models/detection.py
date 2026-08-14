@@ -12,7 +12,7 @@ EXPECTED_DETECTORS: FrozenSet[DetectorName] = frozenset(DetectorName)
 
 
 @dataclass(frozen=True)
-class MessageDetection:
+class Detection:
     """Complete deterministic detection outcome for one email.
 
     Exactly one result is required for every detector. Findings, skipped results,
@@ -25,7 +25,7 @@ class MessageDetection:
 
     def __post_init__(self) -> None:
         if not self.file:
-            raise ValueError("message detection requires a file name")
+            raise ValueError("detection requires a file name")
 
         names = [result.detector for result in self.detector_results]
         if len(names) != len(EXPECTED_DETECTORS) or set(names) != EXPECTED_DETECTORS:

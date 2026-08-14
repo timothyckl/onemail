@@ -14,7 +14,7 @@ import ipaddress
 from dataclasses import dataclass, field
 from typing import Final, Optional, Tuple, Union
 
-from data_models import (
+from ...data_models import (
     AttachmentClass,
     ClearResult,
     DetectorName,

@@ -2,7 +2,7 @@
 
 from typing import Iterable, Optional, Tuple
 
-from data_models import DetectorResult, EmailInput, MessageDetection
+from ..data_models import Detection, DetectorResult, Email
 
 from .detectors import DEFAULT_DETECTORS, Detector
 from .parser import EmailParser
@@ -19,15 +19,15 @@ class DetectionEngine:
         self._parser = parser or EmailParser()
         self._detectors: Tuple[Detector, ...] = tuple(detectors)
 
-    def detect(self, email_input: EmailInput) -> MessageDetection:
+    def detect(self, email: Email) -> Detection:
         """Parse once, run every detector once, and return the message outcome."""
 
-        observables = self._parser.parse(email_input)
+        observables = self._parser.parse(email)
         results: Tuple[DetectorResult, ...] = tuple(
             detector.detect(observables) for detector in self._detectors
         )
-        return MessageDetection(
-            file=email_input.file,
+        return Detection(
+            file=email.file,
             observables=observables,
             detector_results=results,
         )

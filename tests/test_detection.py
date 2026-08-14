@@ -5,7 +5,7 @@ from email.message import EmailMessage
 from typing import Optional
 
 from detection import DetectionEngine, EmailParser
-from detection.detectors import (
+from detection.detection.detectors import (
     AuthFailureDetector,
     BecNoPayloadDetector,
     CredentialUrlDetector,
@@ -13,7 +13,7 @@ from detection.detectors import (
     Detector,
     ReplyToDivergenceDetector,
 )
-from data_models import (
+from detection.data_models import (
     AttachmentClass,
     AuthFailureEvidence,
     AuthFailureFinding,
@@ -22,7 +22,7 @@ from data_models import (
     CredentialUrlFinding,
     DetectorName,
     DisplayNameSpoofFinding,
-    EmailInput,
+    Email,
     Finding,
     FiredResult,
     MessageObservables,
@@ -64,7 +64,7 @@ class EmailParserTests(unittest.TestCase):
             authentication="mx.example; spf=fail; dmarc=fail",
         )
 
-        observables = EmailParser().parse(EmailInput(file="message.eml", content=raw))
+        observables = EmailParser().parse(Email(file="message.eml", content=raw))
 
         self.assertEqual(observables.path, "message.eml")
         self.assertEqual(observables.from_domain, "evil.example")
@@ -73,6 +73,30 @@ class EmailParserTests(unittest.TestCase):
         self.assertEqual(observables.display_name_brand, "paypal")
         self.assertEqual(observables.spf_result, SpfResult.FAIL)
         self.assertEqual(observables.url_hosts, ("login.evil.example",))
+
+    def test_parser_extracts_attachment_metadata(self) -> None:
+        message = EmailMessage()
+        message["From"] = "sender@example.com"
+        message["To"] = "recipient@example.net"
+        message.set_content("See attachment")
+        message.add_attachment(
+            b"MZ\x00\x00",
+            maintype="application",
+            subtype="octet-stream",
+            filename="payload.exe",
+        )
+
+        observables = EmailParser().parse(
+            Email(file="attachment.eml", content=message.as_bytes())
+        )
+
+        self.assertEqual(observables.attachment_count, 1)
+        self.assertEqual(
+            observables.attachments[0].attachment_class,
+            AttachmentClass.EXECUTABLE,
+        )
+        self.assertEqual(observables.attachments[0].size, 4)
+        self.assertIsNotNone(observables.attachments[0].sha256)
 
     def test_parser_preserves_missing_and_conflicting_header_states(self) -> None:
         raw = (
@@ -84,7 +108,7 @@ class EmailParserTests(unittest.TestCase):
             b"Body\r\n"
         )
 
-        observables = EmailParser().parse(EmailInput(file="duplicate.eml", content=raw))
+        observables = EmailParser().parse(Email(file="duplicate.eml", content=raw))
 
         self.assertEqual(observables.from_domain, "example.com")
         self.assertIsNone(observables.reply_to_differs)
@@ -205,8 +229,8 @@ class DetectorTests(unittest.TestCase):
 
 class ExtraDetectorTests(unittest.TestCase):
     def test_dangerous_attachment_fires_on_executable(self) -> None:
-        from detection.detectors import DangerousAttachmentDetector
-        from data_models import AttachmentObservable
+        from detection.detection.detectors import DangerousAttachmentDetector
+        from detection.data_models import AttachmentObservable
 
         exe = AttachmentObservable(
             name="invoice.exe",
@@ -223,8 +247,8 @@ class ExtraDetectorTests(unittest.TestCase):
         self.assertIsInstance(skipped, SkippedResult)
 
     def test_extension_spoof_fires_on_double_extension(self) -> None:
-        from detection.detectors import AttachmentExtensionSpoofDetector
-        from data_models import AttachmentObservable
+        from detection.detection.detectors import AttachmentExtensionSpoofDetector
+        from detection.data_models import AttachmentObservable
 
         spoof = AttachmentObservable(
             name="statement.pdf.exe",
@@ -239,7 +263,7 @@ class ExtraDetectorTests(unittest.TestCase):
         self.assertIsInstance(fired, FiredResult)
 
     def test_raw_ip_url_fires(self) -> None:
-        from detection.detectors import RawIpUrlDetector
+        from detection.detection.detectors import RawIpUrlDetector
 
         fired = RawIpUrlDetector().detect(
             MessageObservables(
@@ -255,7 +279,7 @@ class ExtraDetectorTests(unittest.TestCase):
         self.assertIsInstance(skipped, SkippedResult)
 
     def test_lookalike_domain_fires_on_typosquat_and_punycode(self) -> None:
-        from detection.detectors import LookalikeDomainDetector
+        from detection.detection.detectors import LookalikeDomainDetector
 
         typo = LookalikeDomainDetector().detect(
             MessageObservables(url_hosts=("paypa1.com",))
@@ -271,7 +295,7 @@ class ExtraDetectorTests(unittest.TestCase):
         self.assertIsInstance(clear, ClearResult)
 
     def test_high_abuse_tld_requires_language(self) -> None:
-        from detection.detectors import HighAbuseTldDetector
+        from detection.detection.detectors import HighAbuseTldDetector
 
         fired = HighAbuseTldDetector().detect(
             MessageObservables(
@@ -291,8 +315,8 @@ class ExtraDetectorTests(unittest.TestCase):
         self.assertIsInstance(clear, ClearResult)
 
     def test_private_sender_ip_only_when_no_public_ip(self) -> None:
-        from detection.detectors import PrivateSenderIpDetector
-        from data_models import SenderIp
+        from detection.detection.detectors import PrivateSenderIpDetector
+        from detection.data_models import SenderIp
 
         only_private = PrivateSenderIpDetector().detect(
             MessageObservables(sender_ips=(SenderIp(address="10.0.0.5", hop=1, trusted=False),))
@@ -309,7 +333,7 @@ class ExtraDetectorTests(unittest.TestCase):
         self.assertIsInstance(mixed, ClearResult)
 
     def test_image_only_body_fires(self) -> None:
-        from detection.detectors import ImageOnlyBodyDetector
+        from detection.detection.detectors import ImageOnlyBodyDetector
 
         fired = ImageOnlyBodyDetector().detect(
             MessageObservables(
@@ -337,7 +361,7 @@ class DetectionEngineTests(unittest.TestCase):
         )
 
         detection = DetectionEngine().detect(
-            EmailInput(file="message.eml", content=raw)
+            Email(file="message.eml", content=raw)
         )
 
         self.assertEqual(
@@ -351,14 +375,14 @@ class DetectionEngineTests(unittest.TestCase):
         )
 
     def test_engine_is_deterministic(self) -> None:
-        email_input = EmailInput(
+        email = Email(
             file="message.eml",
             content=email_bytes(authentication="mx.example; spf=pass; dmarc=pass"),
         )
         engine = DetectionEngine()
 
-        first = engine.detect(email_input)
-        second = engine.detect(email_input)
+        first = engine.detect(email)
+        second = engine.detect(email)
 
         self.assertEqual(first, second)
         self.assertFalse(first.flagged)

@@ -1,20 +1,19 @@
 """Convert raw RFC 822 email bytes into immutable observable facts."""
 
-import email
-import email.policy
 import hashlib
 import re
 from dataclasses import dataclass
+from email import message_from_bytes, policy
 from email.message import Message
 from email.utils import parsedate_to_datetime
 from typing import Final, Iterable, Optional, Set, Tuple
 
-from data_models import (
+from ..data_models import (
     AttachmentClass,
     AttachmentObservable,
     DmarcResult,
     DuplicateHeader,
-    EmailInput,
+    Email,
     MessageObservables,
     NestedSender,
     SenderIp,
@@ -114,60 +113,67 @@ INLINE_IMAGE_TYPES: Final = frozenset(
 class EmailParser:
     """Extract observable facts from one email without making a judgment."""
 
-    def parse(self, email_input: EmailInput) -> MessageObservables:
-        """Return immutable observables derived solely from ``email_input.content``."""
+    def parse(self, email: Email) -> MessageObservables:
+        """Return immutable observables derived solely from ``email.content``."""
 
         try:
-            message = email.message_from_bytes(
-                email_input.content,
-                policy=email.policy.default,
+            message = message_from_bytes(
+                email.content,
+                policy=policy.default,
             )
         except Exception as error:  # hostile input must become data, not a crash
             return MessageObservables(
-                path=email_input.file,
-                byte_count=len(email_input.content),
+                path=email.file,
+                byte_count=len(email.content),
                 parse_error=type(error).__name__,
             )
 
-        duplicate_headers = self._duplicate_headers(message)
-        nested_senders = self._nested_senders(message)
-        received = self._received_observables(message)
-        authentication = self._authentication_observables(message)
-        sender = self._sender_observables(message)
-        content = self._content_observables(message, email_input.content)
+        try:
+            duplicate_headers = self._duplicate_headers(message)
+            nested_senders = self._nested_senders(message)
+            received = self._received_observables(message)
+            authentication = self._authentication_observables(message)
+            sender = self._sender_observables(message)
+            content = self._content_observables(message, email.content)
 
-        return MessageObservables(
-            path=email_input.file,
-            byte_count=len(email_input.content),
-            subject=self._header(message, "Subject"),
-            body_text=content.body_text,
-            has_html=content.has_html,
-            has_plain=content.has_plain,
-            mime_depth=self._mime_depth(message),
-            from_domain=sender.from_domain,
-            reply_to_domain=sender.reply_to_domain,
-            reply_to_differs=sender.reply_to_differs,
-            display_name=sender.display_name,
-            display_name_brand=sender.display_name_brand,
-            has_authentication_results=authentication.has_authentication_results,
-            has_dkim_signature=authentication.has_dkim_signature,
-            has_received_spf=authentication.has_received_spf,
-            spf_result=authentication.spf_result,
-            dmarc_result=authentication.dmarc_result,
-            urls=content.urls,
-            url_hosts=content.url_hosts,
-            attachments=content.attachments,
-            inline_image_count=content.inline_image_count,
-            duplicate_headers=duplicate_headers,
-            nested_senders=nested_senders,
-            raw_date=self._header(message, "Date", limit=80),
-            date_epoch=self._date_epoch(message),
-            received_count=received.count,
-            received_epoch=received.epoch,
-            received_iso=received.iso,
-            receiving_gateway=received.gateway,
-            sender_ips=received.sender_ips,
-        )
+            return MessageObservables(
+                path=email.file,
+                byte_count=len(email.content),
+                subject=self._header(message, "Subject"),
+                body_text=content.body_text,
+                has_html=content.has_html,
+                has_plain=content.has_plain,
+                mime_depth=self._mime_depth(message),
+                from_domain=sender.from_domain,
+                reply_to_domain=sender.reply_to_domain,
+                reply_to_differs=sender.reply_to_differs,
+                display_name=sender.display_name,
+                display_name_brand=sender.display_name_brand,
+                has_authentication_results=authentication.has_authentication_results,
+                has_dkim_signature=authentication.has_dkim_signature,
+                has_received_spf=authentication.has_received_spf,
+                spf_result=authentication.spf_result,
+                dmarc_result=authentication.dmarc_result,
+                urls=content.urls,
+                url_hosts=content.url_hosts,
+                attachments=content.attachments,
+                inline_image_count=content.inline_image_count,
+                duplicate_headers=duplicate_headers,
+                nested_senders=nested_senders,
+                raw_date=self._header(message, "Date", limit=80),
+                date_epoch=self._date_epoch(message),
+                received_count=received.count,
+                received_epoch=received.epoch,
+                received_iso=received.iso,
+                receiving_gateway=received.gateway,
+                sender_ips=received.sender_ips,
+            )
+        except Exception as error:  # malformed structured headers may fail lazily
+            return MessageObservables(
+                path=email.file,
+                byte_count=len(email.content),
+                parse_error=type(error).__name__,
+            )
 
     @staticmethod
     def _header(message: Message, name: str, limit: Optional[int] = None) -> Optional[str]:

@@ -3,7 +3,7 @@
 from abc import ABC, abstractmethod
 from typing import Generic, TypeVar, Union
 
-from data_models import (
+from ...data_models import (
     ClearResult,
     DetectorName,
     Finding,
