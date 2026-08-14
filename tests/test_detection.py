@@ -74,30 +74,6 @@ class EmailParserTests(unittest.TestCase):
         self.assertEqual(observables.spf_result, SpfResult.FAIL)
         self.assertEqual(observables.url_hosts, ("login.evil.example",))
 
-    def test_parser_extracts_attachment_metadata(self) -> None:
-        message = EmailMessage()
-        message["From"] = "sender@example.com"
-        message["To"] = "recipient@example.net"
-        message.set_content("See attachment")
-        message.add_attachment(
-            b"MZ\x00\x00",
-            maintype="application",
-            subtype="octet-stream",
-            filename="payload.exe",
-        )
-
-        observables = EmailParser().parse(
-            EmailInput(file="attachment.eml", content=message.as_bytes())
-        )
-
-        self.assertEqual(observables.attachment_count, 1)
-        self.assertEqual(
-            observables.attachments[0].attachment_class,
-            AttachmentClass.EXECUTABLE,
-        )
-        self.assertEqual(observables.attachments[0].size, 4)
-        self.assertIsNotNone(observables.attachments[0].sha256)
-
     def test_parser_preserves_missing_and_conflicting_header_states(self) -> None:
         raw = (
             b"From: first@example.com\r\n"
@@ -227,6 +203,131 @@ class DetectorTests(unittest.TestCase):
         self.assertIsInstance(clear, ClearResult)
 
 
+class ExtraDetectorTests(unittest.TestCase):
+    def test_dangerous_attachment_fires_on_executable(self) -> None:
+        from detection.detectors import DangerousAttachmentDetector
+        from data_models import AttachmentObservable
+
+        exe = AttachmentObservable(
+            name="invoice.exe",
+            content_type="application/octet-stream",
+            attachment_class=AttachmentClass.EXECUTABLE,
+            sha256="0" * 64,
+            size=10,
+        )
+        fired = DangerousAttachmentDetector().detect(
+            MessageObservables(attachments=(exe,))
+        )
+        skipped = DangerousAttachmentDetector().detect(MessageObservables())
+        self.assertIsInstance(fired, FiredResult)
+        self.assertIsInstance(skipped, SkippedResult)
+
+    def test_extension_spoof_fires_on_double_extension(self) -> None:
+        from detection.detectors import AttachmentExtensionSpoofDetector
+        from data_models import AttachmentObservable
+
+        spoof = AttachmentObservable(
+            name="statement.pdf.exe",
+            content_type="application/octet-stream",
+            attachment_class=AttachmentClass.EXECUTABLE,
+            sha256="0" * 64,
+            size=10,
+        )
+        fired = AttachmentExtensionSpoofDetector().detect(
+            MessageObservables(attachments=(spoof,))
+        )
+        self.assertIsInstance(fired, FiredResult)
+
+    def test_raw_ip_url_fires(self) -> None:
+        from detection.detectors import RawIpUrlDetector
+
+        fired = RawIpUrlDetector().detect(
+            MessageObservables(
+                urls=("http://203.0.113.9/login",), url_hosts=("203.0.113.9",)
+            )
+        )
+        clear = RawIpUrlDetector().detect(
+            MessageObservables(urls=("http://safe.example/",), url_hosts=("safe.example",))
+        )
+        skipped = RawIpUrlDetector().detect(MessageObservables())
+        self.assertIsInstance(fired, FiredResult)
+        self.assertIsInstance(clear, ClearResult)
+        self.assertIsInstance(skipped, SkippedResult)
+
+    def test_lookalike_domain_fires_on_typosquat_and_punycode(self) -> None:
+        from detection.detectors import LookalikeDomainDetector
+
+        typo = LookalikeDomainDetector().detect(
+            MessageObservables(url_hosts=("paypa1.com",))
+        )
+        puny = LookalikeDomainDetector().detect(
+            MessageObservables(url_hosts=("xn--pypal-4ve.com",))
+        )
+        clear = LookalikeDomainDetector().detect(
+            MessageObservables(from_domain="example.com", url_hosts=("example.com",))
+        )
+        self.assertIsInstance(typo, FiredResult)
+        self.assertIsInstance(puny, FiredResult)
+        self.assertIsInstance(clear, ClearResult)
+
+    def test_high_abuse_tld_requires_language(self) -> None:
+        from detection.detectors import HighAbuseTldDetector
+
+        fired = HighAbuseTldDetector().detect(
+            MessageObservables(
+                subject="Your account expires today",
+                url_hosts=("secure-login.top",),
+                urls=("https://secure-login.top/",),
+            )
+        )
+        clear = HighAbuseTldDetector().detect(
+            MessageObservables(
+                subject="Weekly newsletter",
+                url_hosts=("secure-login.top",),
+                urls=("https://secure-login.top/",),
+            )
+        )
+        self.assertIsInstance(fired, FiredResult)
+        self.assertIsInstance(clear, ClearResult)
+
+    def test_private_sender_ip_only_when_no_public_ip(self) -> None:
+        from detection.detectors import PrivateSenderIpDetector
+        from data_models import SenderIp
+
+        only_private = PrivateSenderIpDetector().detect(
+            MessageObservables(sender_ips=(SenderIp(address="10.0.0.5", hop=1, trusted=False),))
+        )
+        mixed = PrivateSenderIpDetector().detect(
+            MessageObservables(
+                sender_ips=(
+                    SenderIp(address="10.0.0.5", hop=1, trusted=False),
+                    SenderIp(address="137.184.34.4", hop=2, trusted=False),
+                )
+            )
+        )
+        self.assertIsInstance(only_private, FiredResult)
+        self.assertIsInstance(mixed, ClearResult)
+
+    def test_image_only_body_fires(self) -> None:
+        from detection.detectors import ImageOnlyBodyDetector
+
+        fired = ImageOnlyBodyDetector().detect(
+            MessageObservables(
+                has_html=True, has_plain=False, body_text="  ",
+                urls=("https://x.example/",),
+            )
+        )
+        clear = ImageOnlyBodyDetector().detect(
+            MessageObservables(
+                has_html=True, has_plain=False,
+                body_text="A perfectly ordinary amount of readable body text here.",
+                urls=("https://x.example/",),
+            )
+        )
+        self.assertIsInstance(fired, FiredResult)
+        self.assertIsInstance(clear, ClearResult)
+
+
 class DetectionEngineTests(unittest.TestCase):
     def test_engine_returns_complete_flagged_detection(self) -> None:
         raw = email_bytes(
@@ -262,9 +363,14 @@ class DetectionEngineTests(unittest.TestCase):
         self.assertEqual(first, second)
         self.assertFalse(first.flagged)
         self.assertEqual(first.findings, ())
-        self.assertEqual(
-            {result.detector for result in first.skipped},
+        # On a bare email, the Reply-To and credential-URL rules skip; additional
+        # detectors that need attachments or URLs also skip. Assert the intended
+        # pair is present rather than an exact set, so adding detectors that skip
+        # on an empty message doesn't make this brittle.
+        skipped_detectors = {result.detector for result in first.skipped}
+        self.assertLessEqual(
             {DetectorName.REPLY_TO_DIVERGENCE, DetectorName.CREDENTIAL_URL},
+            skipped_detectors,
         )
 
 

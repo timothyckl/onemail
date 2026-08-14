@@ -2,20 +2,47 @@
 
 from .base import Detector
 from .detectors import (
-    DEFAULT_DETECTORS,
+    DEFAULT_DETECTORS as BUILTIN_DETECTORS,
     AuthFailureDetector,
     BecNoPayloadDetector,
     CredentialUrlDetector,
     DisplayNameSpoofDetector,
     ReplyToDivergenceDetector,
 )
+from .extra_detectors import (
+    EXTRA_DETECTORS,
+    AttachmentExtensionSpoofDetector,
+    DangerousAttachmentDetector,
+    DeepMimeNestingDetector,
+    DuplicateHeaderConflictDetector,
+    HighAbuseTldDetector,
+    ImageOnlyBodyDetector,
+    LookalikeDomainDetector,
+    NestedSenderMismatchDetector,
+    PrivateSenderIpDetector,
+    RawIpUrlDetector,
+)
+
+# The engine imports DEFAULT_DETECTORS from this package, so extending it here
+# is all that is needed to activate the additional rules.
+DEFAULT_DETECTORS = BUILTIN_DETECTORS + EXTRA_DETECTORS
 
 __all__ = [
+    "AttachmentExtensionSpoofDetector",
     "AuthFailureDetector",
     "BecNoPayloadDetector",
     "CredentialUrlDetector",
     "DEFAULT_DETECTORS",
+    "DangerousAttachmentDetector",
+    "DeepMimeNestingDetector",
     "Detector",
     "DisplayNameSpoofDetector",
+    "DuplicateHeaderConflictDetector",
+    "HighAbuseTldDetector",
+    "ImageOnlyBodyDetector",
+    "LookalikeDomainDetector",
+    "NestedSenderMismatchDetector",
+    "PrivateSenderIpDetector",
+    "RawIpUrlDetector",
     "ReplyToDivergenceDetector",
 ]

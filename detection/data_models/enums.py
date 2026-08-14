@@ -11,6 +11,17 @@ class DetectorName(str, Enum):
     CREDENTIAL_URL = "credential_url"
     DISPLAY_NAME_SPOOF = "display_name_spoof"
     BEC_NO_PAYLOAD = "bec_no_payload"
+    # Additional deterministic detectors (all run off already-parsed observables).
+    DANGEROUS_ATTACHMENT = "dangerous_attachment"
+    ATTACHMENT_EXTENSION_SPOOF = "attachment_extension_spoof"
+    DUPLICATE_HEADER_CONFLICT = "duplicate_header_conflict"
+    NESTED_SENDER_MISMATCH = "nested_sender_mismatch"
+    DEEP_MIME_NESTING = "deep_mime_nesting"
+    PRIVATE_SENDER_IP = "private_sender_ip"
+    RAW_IP_URL = "raw_ip_url"
+    LOOKALIKE_DOMAIN = "lookalike_domain"
+    HIGH_ABUSE_TLD = "high_abuse_tld"
+    IMAGE_ONLY_BODY = "image_only_body"
 
 
 class DetectorStatus(str, Enum):
