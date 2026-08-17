@@ -2,3 +2,7 @@ docker>=7.1,<8
 langchain-core>=0.3,<2
 langchain-deepseek>=1.1,<2
 pydantic>=2.10,<3
+
+# Web front-end dependencies (in addition to OneMail's own requirements.txt).
+Flask>=3.0,<4
+markdown>=3.5,<4

@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>OneMail — quarantine intake</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Spectral:ital,wght@0,400;0,500;0,600;1,400&family=Hanken+Grotesk:wght@400;500;600;700&family=Spline+Sans+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="topbar-inner">
+      <div class="brand">
+        <span class="brand-name">OneMail</span>
+        <span class="brand-role">quarantine intake</span>
+      </div>
+      <p class="brand-line">
+        <span class="datum">{{ detector_count }} detectors</span><span class="dot">·</span><span class="datum">deterministic stage</span><span class="dot">·</span><span class="datum">renderer: {{ markdown_engine }}</span>
+      </p>
+    </div>
+  </header>
+
+  <main class="desk">
+    <!-- LEFT: intake -->
+    <section class="intake">
+      <div class="tabs" role="tablist" aria-label="Intake mode">
+        <button class="tab is-active" data-mode="scan" role="tab" aria-selected="true">Scan message</button>
+        <button class="tab" data-mode="preview" role="tab" aria-selected="false">Preview report</button>
+      </div>
+
+      <!-- scan intake -->
+      <div class="intake-mode" data-mode-view="scan">
+        <p class="lede">Drop a raw <b>.eml</b>. Detection runs on arrival — no model, no Docker.</p>
+        <form id="scan-form" class="dropzone" enctype="multipart/form-data">
+          <input id="scan-input" type="file" name="file" accept=".eml" hidden />
+          <svg class="dz-mark" viewBox="0 0 48 34" aria-hidden="true"><rect x="1.5" y="1.5" width="45" height="31" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M2 3 L24 20 L46 3" fill="none" stroke="currentColor" stroke-width="1.5"/></svg>
+          <p class="dz-title">Drop an <b>.eml</b> file</p>
+          <p class="dz-sub"><button type="button" class="linklike" data-open="scan-input">or choose a file</button></p>
+        </form>
+        {% if has_samples %}
+        <div class="samples">
+          <span class="samples-label">Bundled samples</span>
+          <div class="chips">
+            <button class="chip" data-sample="sample-2.eml">sample-2</button>
+            <button class="chip" data-sample="sample-10.eml">sample-10</button>
+            <button class="chip" data-sample="sample-100.eml">sample-100</button>
+            <button class="chip" data-sample="sample-1.eml">sample-1</button>
+            <button class="chip" data-sample="sample-500.eml">sample-500</button>
+          </div>
+        </div>
+        {% endif %}
+        <div id="scan-status" class="status" hidden></div>
+      </div>
+
+      <!-- preview intake -->
+      <div class="intake-mode" data-mode-view="preview" hidden>
+        <p class="lede">Render an analyst report to check the <b>output format</b>, independent of the pipeline.</p>
+        <form id="preview-form" class="dropzone" enctype="multipart/form-data">
+          <input id="preview-input" type="file" name="file" accept=".md,.markdown,.txt" hidden />
+          <svg class="dz-mark" viewBox="0 0 40 44" aria-hidden="true"><path d="M6 1.5 h20 l8 8 v33 h-28 z" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M26 1.5 v8 h8" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M11 20 h18 M11 27 h18 M11 34 h12" stroke="currentColor" stroke-width="1.5"/></svg>
+          <p class="dz-title">Drop a <b>.md</b> report</p>
+          <p class="dz-sub"><button type="button" class="linklike" data-open="preview-input">or choose a file</button></p>
+        </form>
+        <div class="samples">
+          <span class="samples-label">Bundled report</span>
+          <div class="chips">
+            <button class="chip" data-sample-report>sample report</button>
+          </div>
+        </div>
+        <div id="preview-status" class="status" hidden></div>
+      </div>
+    </section>
+
+    <!-- RIGHT: output -->
+    <section class="output">
+      <div class="output-mode" data-mode-view="scan">
+        <div id="scan-empty" class="emptystate">
+          <p class="emptystate-title">No message loaded</p>
+          <p class="emptystate-sub">Drop an <b>.eml</b> or pick a sample on the left. The verdict, findings and observables appear here.</p>
+        </div>
+        <div id="scan-result" class="result" hidden></div>
+      </div>
+      <div class="output-mode" data-mode-view="preview" hidden>
+        <div id="preview-empty" class="emptystate">
+          <p class="emptystate-title">No report loaded</p>
+          <p class="emptystate-sub">Drop a <b>.md</b> file or load the bundled report on the left to preview its formatting.</p>
+        </div>
+        <div id="preview-result" class="result" hidden></div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="footer">
+    <p>Local development tool. The agentic investigation stage (DeepSeek + Docker) is out of scope here by design.</p>
+  </footer>
+
+  <script src="{{ url_for('static', filename='app.js') }}"></script>
+</body>
+</html>

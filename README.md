@@ -230,3 +230,81 @@ python -m unittest discover -s tests -v
 The Docker integration test skips unless the Docker SDK, daemon, and
 `onemail-analysis:latest` image are available. Build the image first to exercise
 the real sandbox path.
+
+# OneMail web console
+
+A small Flask front end for OneMail. Upload a raw `.eml` file and the
+deterministic detection stage runs automatically, showing the verdict, grounded
+findings, an observables summary, and the canonical `DetectionReport` JSON. A
+second mode renders a Markdown report so you can check the **output format**
+before the agentic stage is wired in.
+
+Only the deterministic detection stage runs here. The agentic investigation
+stage is intentionally left out: it needs a configured LangChain model and a
+local Docker daemon, which is the same boundary the project itself draws.
+
+## Layout
+
+These files belong at the OneMail repository root, next to `detection/`,
+`reporting/`, and `dataset/`:
+
+```
+app.py                 # the Flask application
+requirements-web.txt   # Flask + markdown
+templates/index.html   # page
+static/style.css       # styling
+static/app.js          # upload / drag-drop / rendering
+samples/sample-report.md   # bundled report for the .md preview test
+```
+
+## Run it
+
+From the repository root:
+
+```bash
+python -m pip install -e .                 # OneMail's own dependencies
+python -m pip install -r requirements-web.txt
+python app.py
+```
+
+Then open <http://127.0.0.1:5000>.
+
+`app.py` adds the repository root to `sys.path`, so it can be launched from
+anywhere, but keeping it at the root is simplest.
+
+## Two modes
+
+**Scan .eml** — drop or choose a raw email. Detection runs immediately (no
+model, no Docker). You get:
+
+- a FLAGGED / CLEAR verdict with file name and SHA-256,
+- each fired detector with its severity, whether it is heuristic, its clause,
+  and the typed evidence behind it,
+- an observables summary (From / Reply-To domains, SPF, DMARC, URL and
+  attachment counts, MIME depth, URL hosts),
+- skipped detectors and their reasons,
+- the canonical `DetectionReport` JSON.
+
+If the repo's own corpus is present (`email/` or
+`dataset/phishing_pot/email/`), one-click chips scan bundled samples such as
+`sample-2.eml`.
+
+**Preview report .md** — drop or choose a Markdown file, or load the bundled
+`samples/sample-report.md`. It renders the report the way the console will
+display analyst output. Use it to sanity-check formatting independent of the
+detection pipeline. The bundled sample mirrors the section structure the
+project's own `agentic.intelligence.Renderer` emits (Summary, Detection
+Context, Artifacts, Claims, Indicators, Diamond Model, MITRE ATT&CK, Cyber Kill
+Chain, Gaps, Evidence).
+
+## Notes
+
+- Uploads are read in memory and never written to disk. Max upload size is
+  25 MB (`app.config["MAX_CONTENT_LENGTH"]`).
+- Rendered Markdown is passed through an allowlist sanitizer, so an uploaded
+  report cannot inject scripts or `javascript:` links into the page.
+- `markdown` is the preferred renderer; if it is not installed the app falls
+  back to a small built-in Markdown subset so the preview still works.
+- This is a local development tool bound to `127.0.0.1`. It is not hardened for
+  public deployment — do not expose it to a network without adding
+  authentication and running behind a production WSGI server.
