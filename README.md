@@ -114,16 +114,20 @@ analyzer = Analyzer(
 analysis = analyzer.analyze(case)
 ```
 
-Build the offline Ubuntu 24.04 analysis image from the repository root:
+### Docker
+
+Build the static-analysis image:
 
 ```bash
 docker build -t onemail-analysis:latest agentic/analysis/image
 ```
 
-The image uses project YARA rules. Antivirus analysis additionally requires a
-recorded ClamAV database snapshot in
-`agentic/analysis/image/signatures/clamav/` before the image is built. Runtime
-networking is always disabled.
+The Ubuntu 24.04 container runs as a non-root user with no network, a read-only
+filesystem, limited resources, and no Docker socket. Containers are deleted
+after each analysis.
+
+ClamAV requires signatures in `agentic/analysis/image/signatures/clamav/`.
+Without them, the report records an antivirus coverage gap.
 
 The intelligence layer consumes structured `Analysis`, validates every claim
 and framework mapping against evidence, and emits canonical JSON plus
