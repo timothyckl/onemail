@@ -1,5 +1,6 @@
 """Orchestrate parsing and deterministic rules for one email."""
 
+import hashlib
 from typing import Iterable, Optional, Tuple
 
 from .data_models import Detection, DetectorResult, Email
@@ -28,6 +29,7 @@ class DetectionEngine:
         )
         return Detection(
             file=email.file,
+            sha256=hashlib.sha256(email.content).hexdigest(),
             observables=observables,
             detector_results=results,
         )

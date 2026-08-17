@@ -20,12 +20,15 @@ class Detection:
     """
 
     file: str
+    sha256: str
     observables: MessageObservables
     detector_results: Tuple[DetectorResult, ...]
 
     def __post_init__(self) -> None:
         if not self.file:
             raise ValueError("detection requires a file name")
+        if len(self.sha256) != 64:
+            raise ValueError("detection requires an email SHA-256 digest")
 
         names = [result.detector for result in self.detector_results]
         if len(names) != len(EXPECTED_DETECTORS) or set(names) != EXPECTED_DETECTORS:

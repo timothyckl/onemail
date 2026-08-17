@@ -6,7 +6,8 @@ OneMail performs deterministic email threat detection followed by deeper agentic
 
 - `detection/data_models/` defines detection data models.
 - `detection/` parses emails and applies deterministic rules.
-- `agentic/` investigates emails already classified as malicious.
+- `agentic/analysis/` performs static analysis of flagged emails in an isolated container.
+- `agentic/intelligence/` drafts evidence-grounded analyst reports.
 - `tests/` contains the project test suite.
 
 Initial detection is always deterministic. Agentic analysis does not decide whether an email is malicious.
@@ -85,10 +86,143 @@ Runnable example:
 python -m scripts.report_phishing_pot
 ```
 
+## Agentic Investigation
+
+Only flagged detections can form a `Case`. The original email is retained at
+this boundary because `Detection` contains attachment metadata rather than raw
+attachment bytes.
+
+```python
+from agentic import Case
+
+case = Case(email=email, detection=result)
+```
+
+`Analyzer` always performs a deterministic static baseline, then lets a bounded
+LangChain agent select additional typed tasks. The model cannot access Docker,
+the host filesystem, a shell, or the network directly.
+
+```python
+from agentic.analysis import Analyzer, DockerSandbox, LangChainAgent
+
+model = ...  # Caller-supplied LangChain chat model.
+agent = LangChainAgent(model)
+analyzer = Analyzer(
+    sandbox=lambda case, limits: DockerSandbox(case, limits),
+    agent=agent,
+)
+analysis = analyzer.analyze(case)
+```
+
+Build the offline Ubuntu 24.04 analysis image from the repository root:
+
+```bash
+docker build -t onemail-analysis:latest agentic/analysis/image
+```
+
+The image uses project YARA rules. Antivirus analysis additionally requires a
+recorded ClamAV database snapshot in
+`agentic/analysis/image/signatures/clamav/` before the image is built. Runtime
+networking is always disabled.
+
+The intelligence layer consumes structured `Analysis`, validates every claim
+and framework mapping against evidence, and emits canonical JSON plus
+deterministically rendered Markdown.
+
+```python
+from agentic.intelligence import Renderer, Reporter
+
+report = Reporter(model, name="configured-model").report(analysis)
+json_report = report.model_dump_json(indent=2)
+markdown_report = Renderer().render(report)
+```
+
+The report uses the Diamond Model, MITRE ATT&CK, and the Cyber Kill Chain. It
+contains no maliciousness verdict or action decision. Deferred capabilities and
+provider placeholders are recorded in `agentic/NOTES.md`.
+
+### End-to-End Example
+
+The caller supplies a configured LangChain chat model. Only emails flagged by
+the deterministic detection stage proceed to sandboxed analysis.
+
+```python
+from pathlib import Path
+
+from langchain_core.language_models import BaseChatModel
+
+from agentic import Case
+from agentic.analysis import Analyzer, DockerSandbox, LangChainAgent
+from agentic.intelligence import Renderer, Reporter
+from detection import DetectionEngine, Email
+
+
+def investigate(path: Path, model: BaseChatModel) -> None:
+    email = Email(file=path.name, content=path.read_bytes())
+    detection = DetectionEngine().detect(email)
+
+    if not detection.flagged:
+        print("Email was not flagged; agentic investigation was not started.")
+        return
+
+    case = Case(email=email, detection=detection)
+    analyzer = Analyzer(
+        sandbox=lambda item, limits: DockerSandbox(item, limits),
+        agent=LangChainAgent(model),
+    )
+    analysis = analyzer.analyze(case)
+
+    report = Reporter(model, name="configured-model").report(analysis)
+    Path("email-intelligence.json").write_text(
+        report.model_dump_json(indent=2) + "\n",
+        encoding="utf-8",
+    )
+    Path("email-intelligence.md").write_text(
+        Renderer().render(report),
+        encoding="utf-8",
+    )
+```
+
+Before calling `investigate()`, build `onemail-analysis:latest`, start the local
+Docker daemon, and instantiate `model` with the approved LangChain provider.
+
+### DeepSeek
+
+The included command-line workflow uses `ChatDeepSeek` with JSON output for both
+planning and reporting:
+
+```bash
+export DEEPSEEK_API_KEY="your-key"
+python scripts/investigate_email.py path/to/email.eml --output reports
+```
+
+Set `DEEPSEEK_MODEL` or pass `--model` to override the default `deepseek-chat`.
+The prompts include the expected JSON schema and a minimal valid example because
+DeepSeek requires explicit JSON instructions. Empty or malformed JSON is retried
+once within the original model-call timeout. OneMail does not use DeepSeek's
+strict function-calling beta because its accepted schema subset excludes the
+`maxLength` and `maxItems` constraints used to bound OneMail output.
+
+Install the Python dependencies with:
+
+```bash
+python -m pip install -e .
+```
+
+OneMail requires Python 3.10 or newer. `requirements.txt` contains the same
+runtime dependency constraints for environments that do not use editable
+installs.
+
 ## Tests
 
-The tests use the checked-out Phishing Pot corpus directly; they do not generate a synthetic dataset. Run from the repository root:
+The corpus tests use the checked-out Phishing Pot samples directly. Agentic unit
+tests use safe in-memory messages plus fake models and sandboxes; they never call
+a real model. Run from the repository root:
 
 ```bash
 python -m unittest discover -s tests -v
 ```
+
+The Docker integration test skips unless the Docker SDK, daemon, and
+`onemail-analysis:latest` image are available. Build the image first to exercise
+the real sandbox path.

@@ -1,0 +1,65 @@
+{
+  "version": "Enterprise ATT&CK 18",
+  "techniques": {
+    "T1027": {
+      "name": "Obfuscated Files or Information",
+      "predicates": ["obfuscated_attachment", "encoded_script"]
+    },
+    "T1059": {
+      "name": "Command and Scripting Interpreter",
+      "predicates": ["script"]
+    },
+    "T1059.001": {
+      "name": "PowerShell",
+      "predicates": ["powershell", "yara_powershell"]
+    },
+    "T1059.005": {
+      "name": "Visual Basic",
+      "predicates": ["visual_basic", "yara_office_autoopen"]
+    },
+    "T1059.007": {
+      "name": "JavaScript/JScript",
+      "predicates": ["javascript"]
+    },
+    "T1105": {
+      "name": "Ingress Tool Transfer",
+      "predicates": []
+    },
+    "T1140": {
+      "name": "Deobfuscate/Decode Files or Information",
+      "predicates": ["encoded_script"]
+    },
+    "T1203": {
+      "name": "Exploitation for Client Execution",
+      "predicates": []
+    },
+    "T1204": {
+      "name": "User Execution",
+      "predicates": ["url", "attachment"]
+    },
+    "T1204.001": {
+      "name": "Malicious Link",
+      "predicates": ["url"]
+    },
+    "T1204.002": {
+      "name": "Malicious File",
+      "predicates": ["attachment", "positive_antivirus_attachment"]
+    },
+    "T1218": {
+      "name": "System Binary Proxy Execution",
+      "predicates": []
+    },
+    "T1566": {
+      "name": "Phishing",
+      "predicates": ["detection"]
+    },
+    "T1566.001": {
+      "name": "Spearphishing Attachment",
+      "predicates": ["attachment", "positive_antivirus_attachment"]
+    },
+    "T1566.002": {
+      "name": "Spearphishing Link",
+      "predicates": ["url"]
+    }
+  }
+}
