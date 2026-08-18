@@ -22,6 +22,8 @@ class DetectorName(str, Enum):
     LOOKALIKE_DOMAIN = "lookalike_domain"
     HIGH_ABUSE_TLD = "high_abuse_tld"
     IMAGE_ONLY_BODY = "image_only_body"
+    # Recovers URLs hidden inside QR-code images ("quishing").
+    QR_URL = "qr_url"
 
 
 class DetectorStatus(str, Enum):

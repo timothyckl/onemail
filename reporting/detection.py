@@ -28,6 +28,7 @@ from detection.data_models import (
 )
 from detection.detectors.detectors import CREDENTIAL_LANGUAGE, URGENCY_LANGUAGE
 from detection.detectors.extra_detectors import EXTRA_DETECTORS
+from detection.detectors.qr_detectors import QR_DETECTORS
 
 
 @dataclass(frozen=True)
@@ -223,7 +224,10 @@ class _FindingValidator:
     """Independently reconstruct expected findings from parsed observables."""
 
     def __init__(self) -> None:
-        self._extra_detectors = {detector.name: detector for detector in EXTRA_DETECTORS}
+        self._extra_detectors = {
+            detector.name: detector
+            for detector in EXTRA_DETECTORS + QR_DETECTORS
+        }
 
     def validate(self, detection: Detection) -> Tuple[ValidationIssue, ...]:
         issues: List[ValidationIssue] = []

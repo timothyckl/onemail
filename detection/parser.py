@@ -8,6 +8,7 @@ from email.message import Message
 from email.utils import parsedate_to_datetime
 from typing import Final, Iterable, Optional, Set, Tuple
 
+from . import qr
 from .data_models import (
     AttachmentClass,
     AttachmentObservable,
@@ -36,6 +37,7 @@ DMARC_PATTERN: Final = re.compile(r"dmarc=(pass|fail|bestguesspass|none)")
 BODY_LIMIT: Final = 20_000
 VALUE_LIMIT: Final = 200
 URL_LIMIT: Final = 400
+QR_IMAGE_LIMIT: Final = 12  # max images scanned for QR codes per message
 
 BRANDS: Final[Tuple[str, ...]] = (
     "paypal",
@@ -156,6 +158,8 @@ class EmailParser:
                 dmarc_result=authentication.dmarc_result,
                 urls=content.urls,
                 url_hosts=content.url_hosts,
+                image_urls=content.image_urls,
+                qr_image_count=content.qr_image_count,
                 attachments=content.attachments,
                 inline_image_count=content.inline_image_count,
                 duplicate_headers=duplicate_headers,
@@ -358,9 +362,12 @@ class EmailParser:
         attachments = []
         body_chunks = []
         urls: Set[str] = set()
+        image_urls: Set[str] = set()
         has_html = False
         has_plain = False
         inline_image_count = 0
+        qr_image_count = 0
+        images_scanned = 0
 
         for part in EmailParser._leaf_parts(message):
             content_type = (part.get_content_type() or "").lower()
@@ -395,6 +402,19 @@ class EmailParser:
             elif content_type in INLINE_IMAGE_TYPES:
                 inline_image_count += 1
 
+            # Recover URLs hidden in QR codes, from both inline images and image
+            # attachments. Decoding is bounded, offline, and never raises.
+            if (
+                payload
+                and content_type.startswith("image/")
+                and images_scanned < QR_IMAGE_LIMIT
+            ):
+                images_scanned += 1
+                decoded = qr.decode_qr_urls(payload)
+                if decoded:
+                    qr_image_count += 1
+                    image_urls.update(item[:URL_LIMIT] for item in decoded)
+
             if payload and content_type.startswith("text/") and not is_attachment:
                 text = payload.decode("utf-8", "replace")
                 if content_type == "text/html":
@@ -411,6 +431,9 @@ class EmailParser:
                 for item in URL_PATTERN.findall(raw)
             )
 
+        # Merge QR-decoded URLs so the existing URL detectors evaluate them too.
+        urls.update(image_urls)
+
         ordered_urls = tuple(sorted(urls))
         hosts = set()
         for url in ordered_urls:
@@ -424,6 +447,8 @@ class EmailParser:
             has_plain=has_plain,
             urls=ordered_urls,
             url_hosts=tuple(sorted(hosts)),
+            image_urls=tuple(sorted(image_urls)),
+            qr_image_count=qr_image_count,
             attachments=tuple(attachments),
             inline_image_count=inline_image_count,
         )
@@ -489,5 +514,7 @@ class _ContentObservables:
     has_plain: bool
     urls: Tuple[str, ...]
     url_hosts: Tuple[str, ...]
+    image_urls: Tuple[str, ...]
+    qr_image_count: int
     attachments: Tuple[AttachmentObservable, ...]
     inline_image_count: int

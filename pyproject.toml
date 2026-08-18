@@ -14,6 +14,14 @@ dependencies = [
     "pydantic>=2.10,<3",
 ]
 
+[project.optional-dependencies]
+# QR-code decoding for quishing detection. Optional so core detection stays
+# dependency light; install with:  python -m pip install "onemail[qr]"
+qr = [
+    "opencv-python-headless>=4.9,<5",
+    "numpy>=1.26,<3",
+]
+
 [tool.setuptools.packages.find]
 include = ["agentic*", "dataset*", "detection*", "reporting*", "scripts*"]
 

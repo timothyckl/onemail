@@ -57,10 +57,12 @@ Two independent side channels sit alongside the pipeline:
 ├── detection/             Stage 1 — deterministic detection
 │   ├── engine.py            DetectionEngine: parse once, run all detectors
 │   ├── parser.py            EmailParser: raw bytes → MessageObservables
+│   ├── qr.py                Optional QR-code decoding (quishing recovery)
 │   ├── detectors/           The deterministic rules
 │   │   ├── base.py            Detector ABC (typed, generic over Finding)
 │   │   ├── detectors.py       5 core detectors
-│   │   └── extra_detectors.py 10 additional detectors
+│   │   ├── extra_detectors.py 10 additional detectors
+│   │   └── qr_detectors.py    QR-URL detector (quishing)
 │   └── data_models/         Standalone, dependency-light typed models
 │       ├── email.py           Email (file + raw bytes)
 │       ├── observables.py     MessageObservables + sub-observables
@@ -139,7 +141,7 @@ agentic dependencies.
 | Type | Role |
 | --- | --- |
 | `Email` | One email file: a `file` name and unmodified RFC 822 `content` bytes. |
-| `MessageObservables` | Everything the parser extracts: subject/body, MIME depth, From/Reply-To domains, SPF/DMARC results, URLs and URL hosts, attachments, duplicate headers, nested senders, sender IPs, received timeline. |
+| `MessageObservables` | Everything the parser extracts: subject/body, MIME depth, From/Reply-To domains, SPF/DMARC results, URLs and URL hosts, **URLs recovered from QR-code images** (`image_urls`, also merged into `urls`), attachments, duplicate headers, nested senders, sender IPs, received timeline. |
 | `AttachmentObservable`, `DuplicateHeader`, `NestedSender`, `SenderIp` | Sub-observables referenced by the message. |
 | `Finding` (+ per-detector subclasses) | What a *fired* detector emits, carrying typed `evidence`. |
 | `DetectorEvidence` (+ subclasses) | The concrete facts behind a finding, so every claim is traceable. |
@@ -169,8 +171,8 @@ side-effect free.
 Detectors are subclasses of the generic `Detector[T]` ABC. Each declares a
 `DetectorName` and implements `detect(observables) -> Fired | Clear | Skipped`.
 The engine's default set is assembled in `detectors/__init__.py` as
-`DEFAULT_DETECTORS = BUILTIN_DETECTORS + EXTRA_DETECTORS`, so activating a new
-rule is a one-line change there.
+`DEFAULT_DETECTORS = BUILTIN_DETECTORS + EXTRA_DETECTORS + QR_DETECTORS`, so
+activating a new rule is a one-line change there.
 
 **Core detectors** (`detectors.py`):
 
@@ -197,8 +199,38 @@ rule is a one-line change there.
 | `high_abuse_tld` | Domain sits in a high-abuse TLD. |
 | `image_only_body` | Body is a single image with no real text. |
 
-Each extra detector ships with its own typed evidence and finding classes, so a
-fired result always carries structured proof rather than a free-text reason.
+**QR detector** (`qr_detectors.py`):
+
+| Name | Signal |
+| --- | --- |
+| `qr_url` | A QR code inside an image encodes a link to a domain unrelated to the sender. |
+
+Each detector ships with its own typed evidence and finding classes, so a fired
+result always carries structured proof rather than a free-text reason.
+
+### QR / quishing recovery
+
+"Quishing" hides the credential-harvesting URL inside an image so it never
+appears in the text or headers that URL extraction reads. OneMail closes this
+blind spot at **parse time**: `detection/qr.py` decodes QR codes from inline and
+attached images and the parser records the recovered links in
+`observables.image_urls`, **also merging them into `observables.urls`**. Two
+things follow from that placement:
+
+- The dedicated `qr_url` detector fires on the signal unique to QR delivery — an
+  image-encoded link pointing off the sender's domain.
+- Because the decoded URL is merged into `urls`, the **existing** URL rules
+  (`credential_url`, `raw_ip_url`, `lookalike_domain`, `high_abuse_tld`) evaluate
+  it for free, so a QR pointing at a punycode lookalike or a bare IP lights those
+  up too.
+
+Parse time is the correct boundary because the agentic sandbox only runs on
+*already-flagged* emails; if a QR code were the only signal, a decode that lived
+in the sandbox would never run. The image backend
+(`opencv-python-headless`, the `qr` extra) is **optional** — with it absent,
+decoding returns nothing and never raises, so core detection stays dependency
+light. Decoding is bounded (image size and count caps) and purely passive:
+images are decoded, never rendered, executed, or fetched.
 
 ---
 
@@ -317,7 +349,8 @@ run from the `web/` directory.
 - **Install:** `python -m pip install -e .` (or use `requirements.txt`). The web
   console additionally needs Flask and `markdown`, both listed in
   `requirements.txt`.
-- **Detection** needs no external services or credentials.
+- **Detection** needs no external services or credentials. QR/quishing recovery
+  is an optional extra: `python -m pip install "onemail[qr]"`.
 - **Agentic investigation** needs a local Docker daemon, the built image
   (`docker build -t onemail-analysis:latest agentic/analysis/image`), and a
   configured LangChain model. The bundled CLI uses DeepSeek:

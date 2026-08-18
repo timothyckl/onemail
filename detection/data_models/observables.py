@@ -87,6 +87,13 @@ class MessageObservables:
     urls: Tuple[str, ...] = ()
     url_hosts: Tuple[str, ...] = ()
 
+    # URLs recovered by decoding QR codes inside inline or attached images. These
+    # are also merged into ``urls``/``url_hosts`` so the existing URL detectors
+    # evaluate them; ``image_urls`` records the image-derived subset so a finding
+    # can cite that a link was hidden in an image rather than written in text.
+    image_urls: Tuple[str, ...] = ()
+    qr_image_count: int = 0
+
     attachments: Tuple[AttachmentObservable, ...] = ()
     inline_image_count: int = 0
 
@@ -106,6 +113,7 @@ class MessageObservables:
             self.byte_count,
             self.mime_depth,
             self.inline_image_count,
+            self.qr_image_count,
             self.received_count,
         )
         if any(value < 0 for value in counts):
