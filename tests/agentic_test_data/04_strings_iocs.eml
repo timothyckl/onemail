@@ -1,0 +1,35 @@
+From: "Microsoft Account Team" <security@ms-account-verify.example>
+To: victim@corp.example
+Reply-To: billing@ms-account-verify.example
+Subject: Config backup
+Authentication-Results: mx.corp.example; spf=fail; dkim=fail; dmarc=fail
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="===============1389048147650244037=="
+
+--===============1389048147650244037==
+Content-Type: text/plain; charset="utf-8"
+Content-Transfer-Encoding: quoted-printable
+
+Our records show unusual sign-in activity. Please verify your account at http=
+s://secure-login.account-check.example/verify to avoid suspension.
+
+--===============1389048147650244037==
+Content-Type: application/octet-stream
+Content-Transfer-Encoding: base64
+Content-Disposition: attachment; filename="config.bin"
+MIME-Version: 1.0
+
+AAECA0NPTkZJRwBjMl91cmw9aHR0cHM6Ly9hY2NvdW50LWNoZWNrLmV4YW1wbGUvZ2F0ZQBkcm9w
+PWV2aWx1c2VyQGF0dGFja2VyLmV4YW1wbGUAa2V5PVFVSkRSRVZHUjBoSlNrdE1UVTVQVUZGU1Ux
+UlZWbGRZV1ZvPQBxRx2U7ImTx0S82M/LPMWmaBmo5sqk4jtpvUGJQdoe3E7YNhPGgklMGeJ0DqlK
+TzlJIMaud224vlklUVR6NCjhQU0YCjVx3hTyQXcL6gU3td14qToWWSqQa7JEqPLmy1qDfroR8rDL
+Ngmz2F5IxfQyXPhIIl/Ar8nVPhEeYkqAYE1DFMC1lofLlQ+Pnnni/8j9eJz9CvvAgNCgsU6Dt74L
+1XQfrjZ7iuvOLZVjNrXPjvrRnGTPYNTOlbAb0AuF/nNU6dJzLbdNrevl4Uc3lNyditlB72ZJZMta
+R0c7sw23rwJ7JqlSokcrJhBs4DXZnwzkaoI1hw3nj1g7LigzpWLYFwES5l2V8Xq2hC3H5tyP9UJb
+V8/qBNUxx2bHL0OndgbLU4/DBufCtdIbHJQD8yVu2oS5VUeHp8rfnwvnm2prUFZJlNgE8DPys6wy
+3kR32I/mvp9eVuzUcde+8enzRrrP8LwavBEIu0qSEGc+YcEhcpzfAoPOjdVA6ZxyzQOT25rRghgI
+5IfS1aUdsUsRKHctNcHZXGnBIUxMD4Urg6pEyzB1hlM0xvGqJa0Lnw4EUtjpOx2B3eAxsDjxIpor
+4nB4R2xdN7sbj+JKlmrQD60rjfElxYnkQ3yC5BlCs7KS1LpNP5RKL+AllU2yyXbLfHpig1fJDTRA
+etuKX90N0hTqqA==
+
+--===============1389048147650244037==--

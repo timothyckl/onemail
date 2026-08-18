@@ -1,0 +1,34 @@
+From: "Microsoft Account Team" <security@ms-account-verify.example>
+To: victim@corp.example
+Reply-To: billing@ms-account-verify.example
+Subject: Please review the PDF
+Authentication-Results: mx.corp.example; spf=fail; dkim=fail; dmarc=fail
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="===============3138919933212815325=="
+
+--===============3138919933212815325==
+Content-Type: text/plain; charset="utf-8"
+Content-Transfer-Encoding: quoted-printable
+
+Our records show unusual sign-in activity. Please verify your account at http=
+s://secure-login.account-check.example/verify to avoid suspension.
+
+--===============3138919933212815325==
+Content-Type: application/pdf
+Content-Transfer-Encoding: base64
+Content-Disposition: attachment; filename="invoice.pdf"
+MIME-Version: 1.0
+
+JVBERi0xLjUKMSAwIG9iago8PCAvVHlwZSAvQ2F0YWxvZyAvUGFnZXMgMiAwIFIgL09wZW5BY3Rp
+b24gNSAwIFIgPj4KZW5kb2JqCjIgMCBvYmoKPDwgL1R5cGUgL1BhZ2VzIC9LaWRzIFszIDAgUl0g
+L0NvdW50IDEgPj4KZW5kb2JqCjMgMCBvYmoKPDwgL1R5cGUgL1BhZ2UgL1BhcmVudCAyIDAgUiAv
+TWVkaWFCb3ggWzAgMCAzMDAgMjAwXSAvQ29udGVudHMgNCAwIFIgPj4KZW5kb2JqCjQgMCBvYmoK
+PDwgL0xlbmd0aCA0NCA+PgpzdHJlYW0KQlQgL0YxIDEyIFRmIDIwIDEwMCBUZCAoSW52b2ljZSkg
+VGogRVQKZW5kc3RyZWFtCmVuZG9iago1IDAgb2JqCjw8IC9UeXBlIC9BY3Rpb24gL1MgL0phdmFT
+Y3JpcHQgL0pTIChhcHAuYWxlcnQoJ2JlbmlnbiBmaXh0dXJlOiBzZWUgaHR0cHM6Ly9hY2NvdW50
+LWNoZWNrLmV4YW1wbGUvdmVyaWZ5Jyk7KSA+PgplbmRvYmoKeHJlZgowIDYKMDAwMDAwMDAwMCA2
+NTUzNSBmIAowMDAwMDAwMDA5IDAwMDAwIG4gCjAwMDAwMDAwNzYgMDAwMDAgbiAKMDAwMDAwMDEz
+MyAwMDAwMCBuIAowMDAwMDAwMjIwIDAwMDAwIG4gCjAwMDAwMDAzMDggMDAwMDAgbiAKdHJhaWxl
+cgo8PCAvU2l6ZSA2IC9Sb290IDEgMCBSID4+CnN0YXJ0eHJlZgo0MzUKJSVFT0Y=
+
+--===============3138919933212815325==--

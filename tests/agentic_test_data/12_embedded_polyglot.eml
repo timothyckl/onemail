@@ -1,0 +1,42 @@
+From: "Microsoft Account Team" <security@ms-account-verify.example>
+To: victim@corp.example
+Reply-To: billing@ms-account-verify.example
+Subject: Company photo
+Authentication-Results: mx.corp.example; spf=fail; dkim=fail; dmarc=fail
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="===============0449613232828287250=="
+
+--===============0449613232828287250==
+Content-Type: text/plain; charset="utf-8"
+Content-Transfer-Encoding: quoted-printable
+
+Our records show unusual sign-in activity. Please verify your account at http=
+s://secure-login.account-check.example/verify to avoid suspension.
+
+--===============0449613232828287250==
+Content-Type: image/jpeg
+Content-Transfer-Encoding: base64
+Content-Disposition: attachment; filename="photo.jpg"
+MIME-Version: 1.0
+
+/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAgGBgcGBQgHBwcJCQgKDBQNDAsLDBkSEw8UHRofHh0a
+HBwgJC4nICIsIxwcKDcpLDAxNDQ0Hyc5PTgyPC4zNDL/2wBDAQkJCQwLDBgNDRgyIRwhMjIyMjIy
+MjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjL/wAARCAAQABADASIA
+AhEBAxEB/8QAHwAAAQUBAQEBAQEAAAAAAAAAAAECAwQFBgcICQoL/8QAtRAAAgEDAwIEAwUFBAQA
+AAF9AQIDAAQRBRIhMUEGE1FhByJxFDKBkaEII0KxwRVS0fAkM2JyggkKFhcYGRolJicoKSo0NTY3
+ODk6Q0RFRkdISUpTVFVWV1hZWmNkZWZnaGlqc3R1dnd4eXqDhIWGh4iJipKTlJWWl5iZmqKjpKWm
+p6ipqrKztLW2t7i5usLDxMXGx8jJytLT1NXW19jZ2uHi4+Tl5ufo6erx8vP09fb3+Pn6/8QAHwEA
+AwEBAQEBAQEBAQAAAAAAAAECAwQFBgcICQoL/8QAtREAAgECBAQDBAcFBAQAAQJ3AAECAxEEBSEx
+BhJBUQdhcRMiMoEIFEKRobHBCSMzUvAVYnLRChYkNOEl8RcYGRomJygpKjU2Nzg5OkNERUZHSElK
+U1RVVldYWVpjZGVmZ2hpanN0dXZ3eHl6goOEhYaHiImKkpOUlZaXmJmaoqOkpaanqKmqsrO0tba3
+uLm6wsPExcbHyMnK0tPU1dbX2Nna4uPk5ebn6Onq8vP09fb3+Pn6/9oADAMBAAIRAxEAPwCvRRRX
+1B5Z/9lQSwMEFAAAAAgAIiwSXRrEpAwmAAAALQAAAAoAAAByZWFkbWUudHh0c0rNy0zPU0gsSs7I
+LEtVSMusKCktAtL5RQolGalw8ZL8/Bw9LgBQSwMEFAAAAAgAIiwSXTC9K6MYAAAAFgAAAA8AAABk
+YXRhL3JlcG9ydC5jc3bLTNFJzM0vzSvhMtQxNDDgMtIxMjXgAgBQSwMEFAAAAAgAIiwSXS7TqvUa
+AAAAGAAAAA8AAABkYXRhL25vdGljZS50eHTzyy/JyMxLV0hJzEtPLcovLVbISC1K1eMCAFBLAQIU
+AxQAAAAIACIsEl0axKQMJgAAAC0AAAAKAAAAAAAAAAAAAACAAQAAAAByZWFkbWUudHh0UEsBAhQD
+FAAAAAgAIiwSXTC9K6MYAAAAFgAAAA8AAAAAAAAAAAAAAIABTgAAAGRhdGEvcmVwb3J0LmNzdlBL
+AQIUAxQAAAAIACIsEl0u06r1GgAAABgAAAAPAAAAAAAAAAAAAACAAZMAAABkYXRhL25vdGljZS50
+eHRQSwUGAAAAAAMAAwCyAAAA2gAAAAAA
+
+--===============0449613232828287250==--

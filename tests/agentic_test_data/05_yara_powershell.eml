@@ -1,0 +1,26 @@
+From: "Microsoft Account Team" <security@ms-account-verify.example>
+To: victim@corp.example
+Reply-To: billing@ms-account-verify.example
+Subject: Log excerpt
+Authentication-Results: mx.corp.example; spf=fail; dkim=fail; dmarc=fail
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="===============3736270752700659730=="
+
+--===============3736270752700659730==
+Content-Type: text/plain; charset="utf-8"
+Content-Transfer-Encoding: quoted-printable
+
+Our records show unusual sign-in activity. Please verify your account at http=
+s://secure-login.account-check.example/verify to avoid suspension.
+
+--===============3736270752700659730==
+Content-Type: text/plain
+Content-Transfer-Encoding: base64
+Content-Disposition: attachment; filename="log.txt"
+MIME-Version: 1.0
+
+UkVNIEJlbmlnbiBmaXh0dXJlIGRlbW9uc3RyYXRpbmcgdGhlIFBvd2VyU2hlbGwgWUFSQSBpbmRp
+Y2F0b3IuDQpwb3dlcnNoZWxsIC1FbmNvZGVkQ29tbWFuZCBaUUJqQUdnQWJ3QWdBR0lBWlFCdUFH
+a0Fad0J1QUE9PQ0K
+
+--===============3736270752700659730==--
