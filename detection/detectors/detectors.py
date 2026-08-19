@@ -24,6 +24,7 @@ from ..data_models import (
 )
 
 from .base import Detector
+from .. import textnorm
 
 
 CREDENTIAL_LANGUAGE: Final[Tuple[str, ...]] = (
@@ -241,10 +242,23 @@ def registered_domain(host: Optional[str]) -> Optional[str]:
 
 
 def message_text(observables: MessageObservables) -> str:
-    """Return lower-cased subject and decoded body text for language rules."""
+    """Return normalized subject and body text for language rules.
 
-    parts = tuple(part for part in (observables.subject, observables.body_text) if part)
-    return " ".join(parts).lower()
+    Uses the parser's Unicode-folded fields so homoglyph, combining-mark, and
+    HTML-entity obfuscation cannot defeat phrase matching. Falls back to
+    normalizing the raw fields for observables constructed without them (for
+    example in tests); both paths call the same pure function, so the result
+    is deterministic either way.
+    """
+
+    subject = observables.normalized_subject
+    if subject is None and observables.subject is not None:
+        subject = textnorm.normalize(observables.subject)
+    body = observables.normalized_body_text or textnorm.normalize(
+        observables.body_text
+    )
+    parts = tuple(part for part in (subject, body) if part)
+    return " ".join(parts)
 
 
 def matching_phrases(text: str, phrases: Sequence[str]) -> Tuple[str, ...]:

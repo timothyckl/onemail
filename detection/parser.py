@@ -8,7 +8,7 @@ from email.message import Message
 from email.utils import parsedate_to_datetime
 from typing import Final, Iterable, Optional, Set, Tuple
 
-from . import qr
+from . import qr, textnorm
 from .data_models import (
     AttachmentClass,
     AttachmentObservable,
@@ -138,11 +138,21 @@ class EmailParser:
             sender = self._sender_observables(message)
             content = self._content_observables(message, email.content)
 
+            subject = self._header(message, "Subject")
+
             return MessageObservables(
                 path=email.file,
                 byte_count=len(email.content),
-                subject=self._header(message, "Subject"),
+                subject=subject,
                 body_text=content.body_text,
+                normalized_subject=(
+                    textnorm.normalize(subject) if subject is not None else None
+                ),
+                normalized_body_text=textnorm.normalize(content.body_text),
+                subject_confusable_count=textnorm.count_confusables(subject or ""),
+                body_combining_mark_count=textnorm.count_combining_marks(
+                    content.body_text
+                ),
                 has_html=content.has_html,
                 has_plain=content.has_plain,
                 mime_depth=self._mime_depth(message),

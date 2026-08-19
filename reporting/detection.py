@@ -26,6 +26,7 @@ from detection.data_models import (
     Severity,
     SpfResult,
 )
+from detection import textnorm
 from detection.detectors.detectors import CREDENTIAL_LANGUAGE, URGENCY_LANGUAGE
 from detection.detectors.extra_detectors import EXTRA_DETECTORS
 from detection.detectors.qr_detectors import QR_DETECTORS
@@ -486,10 +487,16 @@ def _registered_domain(host: Optional[str]) -> Optional[str]:
 
 
 def _message_text(detection: Detection) -> str:
+    # Mirrors ``detection.detectors.detectors.message_text`` exactly so the
+    # validator reconstructs the same normalized text the detectors matched on.
     observables = detection.observables
-    return " ".join(
-        part for part in (observables.subject, observables.body_text) if part
-    ).lower()
+    subject = observables.normalized_subject
+    if subject is None and observables.subject is not None:
+        subject = textnorm.normalize(observables.subject)
+    body = observables.normalized_body_text or textnorm.normalize(
+        observables.body_text
+    )
+    return " ".join(part for part in (subject, body) if part)
 
 
 def _matching_phrases(text: str, phrases: Tuple[str, ...]) -> Tuple[str, ...]:

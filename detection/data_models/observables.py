@@ -68,6 +68,19 @@ class MessageObservables:
 
     subject: Optional[str] = None
     body_text: str = ""
+
+    # Unicode-folded text (see ``detection.textnorm.normalize``): HTML entities
+    # unescaped, homoglyphs / combining marks / math letters folded to plain
+    # lower-case Latin. Phrase and brand rules match against these fields so
+    # obfuscated text matches what a human reads. ``None`` mirrors ``subject``.
+    normalized_subject: Optional[str] = None
+    normalized_body_text: str = ""
+
+    # Obfuscation counts observed in the transmitted text. Mixed-script
+    # homoglyphs and combining-mark tricks are themselves detection signals.
+    subject_confusable_count: int = 0
+    body_combining_mark_count: int = 0
+
     has_html: bool = False
     has_plain: bool = False
     mime_depth: int = 0
@@ -111,6 +124,8 @@ class MessageObservables:
     def __post_init__(self) -> None:
         counts = (
             self.byte_count,
+            self.subject_confusable_count,
+            self.body_combining_mark_count,
             self.mime_depth,
             self.inline_image_count,
             self.qr_image_count,
