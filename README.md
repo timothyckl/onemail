@@ -6,7 +6,7 @@ OneMail performs deterministic email threat detection followed by deeper agentic
 
 - `detection/data_models/` defines detection data models.
 - `detection/` parses emails and applies deterministic rules.
-- `agentic/analysis/` performs static analysis of flagged emails in an isolated container.
+- `agentic/analysis/` performs bounded inspection, rendering, and emulation of flagged emails in an isolated container.
 - `agentic/intelligence/` drafts evidence-grounded analyst reports.
 - `tests/` contains the project test suite.
 
@@ -99,8 +99,9 @@ case = Case(email=email, detection=result)
 ```
 
 `Analyzer` always performs a deterministic static baseline, then lets a bounded
-LangChain agent select additional typed tasks. The model cannot access Docker,
-the host filesystem, a shell, or the network directly.
+LangChain agent select additional typed tasks for deep inspection, offline
+rendering, decoding, carving, IOC extraction, or emulation. The model cannot
+access Docker, the host filesystem, a shell, or the network directly.
 
 ```python
 from agentic.analysis import Analyzer, DockerSandbox, LangChainAgent
@@ -116,7 +117,7 @@ analysis = analyzer.analyze(case)
 
 ### Docker
 
-Build the static-analysis image:
+Build the isolated investigation image:
 
 ```bash
 docker build -t onemail-analysis:latest agentic/analysis/image
@@ -124,10 +125,23 @@ docker build -t onemail-analysis:latest agentic/analysis/image
 
 The Ubuntu 24.04 container runs as a non-root user with no network, a read-only
 filesystem, limited resources, and no Docker socket. Containers are deleted
-after each analysis.
+after each analysis. Typed tools support bounded recursive archive extraction,
+file carving and decoding, Office/PDF/PE/script inspection, offline document
+rendering with OCR, and Speakeasy PE emulation. Samples are never executed
+natively. The runner streams structured progress events for every container
+action, including its status and duration.
 
-ClamAV requires signatures in `agentic/analysis/image/signatures/clamav/`.
-Without them, the report records an antivirus coverage gap.
+After sandbox analysis, a local SQLite correlation store compares normalised
+indicators, exact hashes, and 64-bit similarity hashes with prior investigations.
+It never stores raw email or attachment bytes. Configure its location with
+`ONEMAIL_CORRELATION_DB`.
+
+Optionally set `VIRUSTOTAL_API_KEY` to offer the planner a typed
+`virustotal_hash` enrichment task. This host-side broker queries existing
+VirusTotal file reports by SHA-256, caches bounded normalised results, and
+throttles requests. It never uploads email or attachment bytes. The queried hash
+is disclosed to VirusTotal; missing reports, timeouts, and rate limits are
+recorded as investigation gaps.
 
 The intelligence layer consumes structured `Analysis`, validates every claim
 and framework mapping against evidence, and emits canonical JSON plus
@@ -190,22 +204,28 @@ def investigate(path: Path, model: BaseChatModel) -> None:
 Before calling `investigate()`, build `onemail-analysis:latest`, start the local
 Docker daemon, and instantiate `model` with the approved LangChain provider.
 
-### DeepSeek
+### LM Studio
 
-The included command-line workflow uses `ChatDeepSeek` with JSON output for both
-planning and reporting:
+The included web and command-line workflows use LM Studio's local
+OpenAI-compatible API for both planning and reporting. Start LM Studio's local
+server, load the configured model, then copy the example configuration:
 
 ```bash
-export DEEPSEEK_API_KEY="your-key"
+cp .env.example .env
 python scripts/investigate_email.py path/to/email.eml --output reports
 ```
 
-Set `DEEPSEEK_MODEL` or pass `--model` to override the default `deepseek-chat`.
-The prompts include the expected JSON schema and a minimal valid example because
-DeepSeek requires explicit JSON instructions. Empty or malformed JSON is retried
-once within the original model-call timeout. OneMail does not use DeepSeek's
-strict function-calling beta because its accepted schema subset excludes the
-`maxLength` and `maxItems` constraints used to bound OneMail output.
+The default endpoint is `http://127.0.0.1:1234/v1` and the default model is
+`qwen/qwen3.6-35b-a3b`. Set `LMSTUDIO_BASE_URL` and `LMSTUDIO_MODEL`, or pass
+`--base-url` and `--model`, to override them. No external API key is required;
+`LMSTUDIO_API_KEY=lm-studio` is a local placeholder required by the OpenAI
+client. Investigation planning defaults to medium reasoning, a 300-second model
+timeout, and 16,384 tokens. Report drafting keeps reasoning disabled with an
+8,192-token budget so schema-constrained output completes predictably. Configure
+these independently with the `LMSTUDIO_PLANNER_*` and `LMSTUDIO_REPORTER_*`
+variables in `.env.example`. `ONEMAIL_ANALYSIS_TIMEOUT` controls the overall
+analysis deadline. Planning and reporting both use LM Studio's native
+JSON-schema response format.
 
 Install the Python dependencies with:
 
@@ -231,17 +251,27 @@ The Docker integration test skips unless the Docker SDK, daemon, and
 `onemail-analysis:latest` image are available. Build the image first to exercise
 the real sandbox path.
 
+Install the optional fixture-generation dependencies with:
+
+```bash
+python -m pip install -e ".[dev]"
+```
+
+The agentic fixture generator stages the complete set before publishing it:
+
+```bash
+python tests/agentic_test_data/make_agentic_samples.py OUTPUT_DIR
+```
+
 # OneMail web console
 
 A small Flask front end for OneMail. Upload a raw `.eml` file and the
 deterministic detection stage runs automatically, showing the verdict, grounded
-findings, an observables summary, and the canonical `DetectionReport` JSON. A
-second mode renders a Markdown report so you can check the **output format**
-before the agentic stage is wired in.
-
-Only the deterministic detection stage runs here. The agentic investigation
-stage is intentionally left out: it needs a configured LangChain model and a
-local Docker daemon, which is the same boundary the project itself draws.
+findings, an observables summary, and the canonical `DetectionReport` JSON.
+Flagged messages can then start the LM Studio and Docker investigation. The web
+console shows the current pipeline stage, total elapsed time, per-step duration,
+and live container activity before presenting the final report. A second mode
+renders uploaded Markdown reports independently of the pipeline.
 
 ## Layout
 
@@ -292,10 +322,9 @@ If the repo's own corpus is present (`email/` or
 **Preview report .md** — drop or choose a Markdown file, or load the bundled
 `samples/sample-report.md`. It renders the report the way the console will
 display analyst output. Use it to sanity-check formatting independent of the
-detection pipeline. The bundled sample mirrors the section structure the
-project's own `agentic.intelligence.Renderer` emits (Summary, Detection
-Context, Artifacts, Claims, Indicators, Diamond Model, MITRE ATT&CK, Cyber Kill
-Chain, Gaps, Evidence).
+detection pipeline. The bundled sample mirrors the analyst-focused section structure emitted by
+`agentic.intelligence.Renderer`, including key findings, analysed files,
+framework mappings, limitations, and a collapsible evidence appendix.
 
 ## Notes
 

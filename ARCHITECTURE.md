@@ -25,8 +25,8 @@ raw .eml bytes
       ▼
 ┌─────────────┐   Case: revalidates file name + SHA-256 + flagged
 │   agentic   │
-│  ┌────────┐ │   analysis  → static baseline + bounded LangChain agent
-│  │analysis│ │              runs typed tasks inside a locked-down container
+│  ┌────────┐ │   analysis  → static baseline + reasoning-enabled LangChain planner
+│  │analysis│ │              runs typed inspection/render/emulation tasks in Docker
 │  └────────┘ │   → Analysis { artifacts, observations, gaps, metrics }
 │  ┌────────┐ │
 │  │ intel  │ │   intelligence → validates every claim against evidence
@@ -51,7 +51,7 @@ Two independent side channels sit alongside the pipeline:
 ├── ARCHITECTURE.md        This document
 ├── pyproject.toml         Package metadata + runtime dependencies
 ├── requirements.txt       Same constraints for non-editable installs (+ web deps)
-├── .env.example           Template for the agentic stage's DeepSeek credentials
+├── .env.example           Template for the agentic stage's LM Studio connection
 ├── .gitignore
 │
 ├── detection/             Stage 1 — deterministic detection
@@ -74,11 +74,15 @@ Two independent side channels sit alongside the pipeline:
 │
 ├── agentic/               Stage 2 — investigation of flagged emails
 │   ├── case.py              Case: the detection→investigation boundary
+│   ├── lmstudio.py          Role-specific local LM Studio configuration and status
+│   ├── progress.py          Timed investigation events shared by CLI and web
 │   ├── structured.py        Structured-output helpers for the model
 │   ├── timeout.py           Bounded model-call timeouts
 │   ├── analysis/            Static analysis in an isolated sandbox
 │   │   ├── analyzer.py        Analyzer: deterministic baseline + agent loop
-│   │   ├── agent.py           Agent ABC + LangChainAgent
+│   │   ├── agent.py           Agent ABC + reasoning-enabled LangChainAgent
+│   │   ├── correlation.py     Local exact/fuzzy hash and indicator correlation
+│   │   ├── virustotal.py      Optional host-side SHA-256 report broker
 │   │   ├── sandbox.py         Sandbox ABC + DockerSandbox
 │   │   ├── policy.py          Policy: what the agent is allowed to request
 │   │   ├── tools.py           Typed tasks the agent may select
@@ -86,8 +90,7 @@ Two independent side channels sit alongside the pipeline:
 │   │   └── image/             The analysis container
 │   │       ├── Dockerfile       Ubuntu 24.04, non-root, no network
 │   │       ├── runner.py        In-container entry point
-│   │       ├── rules/base.yar   YARA rules
-│   │       └── signatures/      ClamAV signature drop-in (.gitkeep placeholder)
+│   │       └── rules/base.yar   YARA rules
 │   └── intelligence/        Evidence-grounded reporting
 │       ├── reporter.py        Reporter: Analysis → Report (via the model)
 │       ├── validator.py       Validator: grounds every claim in evidence
@@ -109,7 +112,7 @@ Two independent side channels sit alongside the pipeline:
 │   ├── detect_phishing_pot.py   Detect across the corpus
 │   ├── read_phishing_pot.py     List corpus samples
 │   ├── report_phishing_pot.py   Write a validated coverage report
-│   └── investigate_email.py     Full pipeline with Docker + DeepSeek
+│   └── investigate_email.py     Full pipeline with Docker + LM Studio
 │
 ├── tests/                 unittest suite
 │   ├── test_detection.py
@@ -253,10 +256,11 @@ deterministic detection already flagged, on content that has not changed.
 ## 6. Agentic analysis (`agentic/analysis`)
 
 `Analyzer.analyze(case)` always runs a **deterministic static baseline first**,
-then hands control to a **bounded** agent that may select additional *typed*
-tasks (`tools.py`) subject to `Policy`. The agent is an abstraction (`Agent`);
-`LangChainAgent` is the concrete LangChain-backed implementation, and tests
-substitute a fake.
+then hands control to a **bounded** reasoning-enabled agent that may select
+additional *typed* tasks (`tools.py`) subject to `Policy`. Task definitions
+include a category, applicable formats, and strictly validated option ranges.
+The agent is an abstraction (`Agent`); `LangChainAgent` is the concrete
+LangChain-backed implementation, and tests substitute a fake.
 
 All work that touches artifact bytes happens inside `DockerSandbox` (an
 implementation of the `Sandbox` ABC). The container defined in `analysis/image/`
@@ -269,13 +273,32 @@ is intentionally minimal and locked down:
 
 The model therefore never has direct access to Docker, the host filesystem, a
 shell, or the network — it can only request typed tasks that the analyzer
-executes on its behalf. YARA rules live in `image/rules/`; ClamAV signatures are
-expected in `image/signatures/clamav/` (a `.gitkeep` marks the drop-in point).
-If signatures are absent, the result records an antivirus **coverage gap** rather
-than failing.
+executes on its behalf. YARA rules live in `image/rules/`. Available tasks cover
+bounded recursive archive extraction, embedded carving, base64/hex decoding,
+IOC extraction, Office/PDF/PE/script inspection, offline HTML/PDF/Office
+rendering with OCR, symbolic script analysis, and Speakeasy CPU/API emulation.
+Attachments are never executed natively.
 
-The result is an `Analysis` — a structured record of artifacts, matches,
-observations, gaps, failures, and metrics (`analysis/models.py`).
+The container runner emits a validated JSON-Lines progress protocol. Each tool
+reports start, completion/failure, artifact, tool, and duration while it runs.
+The same `ProgressTracker` also instruments planning, policy validation,
+reporting, and cleanup.
+
+After the container is removed, `SQLiteCorrelator` compares normalised
+indicators, exact SHA-256 values, and bounded 64-bit similarity hashes with prior
+local cases. Only normalised metadata is retained; raw email and attachment
+bytes are not stored.
+
+When `VIRUSTOTAL_API_KEY` is configured, the planner is additionally offered the
+`virustotal_hash` tool. `VirusTotalClient` runs on the host rather than granting
+the container network access. It performs API v3 `GET /files/{sha256}` lookups,
+normalises and caches bounded responses, and enforces a minimum request interval.
+It has no upload implementation. The queried hash is disclosed to VirusTotal;
+missing reports and provider failures become explicit gaps.
+
+The result is an `Analysis` — a structured record of parent/child artifacts,
+matches, observations, gaps, failures, metrics, and correlation evidence
+(`analysis/models.py`).
 
 ---
 
@@ -327,19 +350,24 @@ detecting on it are separate concerns.
 
 ## 10. Web console (`web/`)
 
-A small Flask front end for the **detection stage only**. It has two modes:
+A small Flask front end with two modes:
 
-- **Scan .eml** — upload a raw email; detection runs immediately (no model, no
-  Docker) and the page shows the FLAGGED/CLEAR verdict, each fired detector with
-  its severity/clause/typed evidence, an observables summary, skipped detectors
-  with reasons, and the canonical `DetectionReport` JSON.
+- **Scan .eml** — detection runs immediately and shows the FLAGGED/CLEAR verdict,
+  findings, observables, skipped detectors, and canonical `DetectionReport`.
+  Flagged messages can start an asynchronous LM Studio + Docker investigation.
 - **Preview report .md** — render a Markdown report through an allowlist
-  sanitizer, to check output formatting before the agentic stage is wired in.
+  sanitizer independently of the investigation pipeline.
 
-Uploads are held in memory only (never written to disk), capped at 25 MB, and the
-app binds to `127.0.0.1`. It is a local development tool and is **not** hardened
-for network exposure. `app.py` adds the repository root to `sys.path`, so it can
-run from the `web/` directory.
+Investigations run as bounded, memory-only background jobs. The browser polls a
+same-origin protected status endpoint and displays the current stage, total
+elapsed time, each step's duration, and nested live container activity. Completed
+jobs retain their timeline alongside the final report and expire from memory
+after one hour.
+
+Uploads are held in memory only (apart from the sandbox's short-lived read-only
+input file), capped at 25 MB, and the app binds to `127.0.0.1`. It is a local
+development tool and is **not** hardened for network exposure. `app.py` adds the
+repository root to `sys.path`, so it can run from the `web/` directory.
 
 ---
 
@@ -353,10 +381,11 @@ run from the `web/` directory.
   is an optional extra: `python -m pip install "onemail[qr]"`.
 - **Agentic investigation** needs a local Docker daemon, the built image
   (`docker build -t onemail-analysis:latest agentic/analysis/image`), and a
-  configured LangChain model. The bundled CLI uses DeepSeek:
+  LM Studio's local OpenAI-compatible server and configured model. Planning
+  uses medium reasoning by default while report drafting keeps reasoning off:
 
   ```bash
-  cp .env.example .env      # then set DEEPSEEK_API_KEY
+  cp .env.example .env
   python scripts/investigate_email.py path/to/email.eml --output reports
   ```
 
