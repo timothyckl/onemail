@@ -24,6 +24,7 @@ from ..data_models import (
 )
 
 from .base import Detector
+from ..brands import brand_matches_domain
 from .lexicon import ADVANCE_FEE_LANGUAGE, CREDENTIAL_LANGUAGE, URGENCY_LANGUAGE
 from .. import textnorm
 
@@ -159,7 +160,7 @@ class DisplayNameSpoofDetector(Detector[DisplayNameSpoofFinding]):
             return ClearResult(detector=self.name)
 
         from_domain = (observables.from_domain or "").lower()
-        if observables.display_name_brand in from_domain:
+        if brand_matches_domain(observables.display_name_brand, from_domain):
             return ClearResult(detector=self.name)
 
         finding = DisplayNameSpoofFinding(

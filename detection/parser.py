@@ -9,6 +9,7 @@ from email.utils import parsedate_to_datetime
 from typing import Final, Iterable, Optional, Set, Tuple
 
 from . import qr, textnorm
+from .brands import BRANDS, find_brand
 from .data_models import (
     AttachmentClass,
     AttachmentObservable,
@@ -39,20 +40,8 @@ VALUE_LIMIT: Final = 200
 URL_LIMIT: Final = 400
 QR_IMAGE_LIMIT: Final = 12  # max images scanned for QR codes per message
 
-BRANDS: Final[Tuple[str, ...]] = (
-    "paypal",
-    "microsoft",
-    "apple",
-    "amazon",
-    "netflix",
-    "docusign",
-    "office365",
-    "google",
-    "bank",
-    "irs",
-    "dhl",
-    "fedex",
-)
+# ``BRANDS`` now lives in ``detection.brands`` (imported above) so the parser
+# and the brand detectors share one vocabulary and one legitimate-domain map.
 
 ATTACHMENT_CLASSES: Final = {
     "exe": AttachmentClass.EXECUTABLE,
@@ -348,11 +337,9 @@ class EmailParser:
             if match:
                 display_name = match.group(1).strip() or None
                 if display_name:
-                    lowered = display_name.lower()
-                    display_name_brand = next(
-                        (brand for brand in BRANDS if brand in lowered),
-                        None,
-                    )
+                    # Match against the Unicode-folded name so homoglyph or
+                    # combining-mark obfuscation cannot hide the brand.
+                    display_name_brand = find_brand(textnorm.normalize(display_name))
 
         raw_reply_to = message.get("Reply-To")
         reply_to_domain = _address_domain(raw_reply_to)

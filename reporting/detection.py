@@ -27,6 +27,8 @@ from detection.data_models import (
     SpfResult,
 )
 from detection import textnorm
+from detection.brands import brand_matches_domain
+from detection.detectors.brand_detectors import BRAND_DETECTORS
 from detection.detectors.detectors import CREDENTIAL_LANGUAGE, URGENCY_LANGUAGE
 from detection.detectors.extra_detectors import EXTRA_DETECTORS
 from detection.detectors.qr_detectors import QR_DETECTORS
@@ -227,7 +229,7 @@ class _FindingValidator:
     def __init__(self) -> None:
         self._extra_detectors = {
             detector.name: detector
-            for detector in EXTRA_DETECTORS + QR_DETECTORS
+            for detector in EXTRA_DETECTORS + QR_DETECTORS + BRAND_DETECTORS
         }
 
     def validate(self, detection: Detection) -> Tuple[ValidationIssue, ...]:
@@ -370,7 +372,7 @@ class _FindingValidator:
             expected_clause,
             Severity.HIGH,
             False,
-            bool(brand) and brand not in sender_domain,
+            bool(brand) and not brand_matches_domain(brand, sender_domain),
             issues,
         )
 

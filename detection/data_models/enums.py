@@ -24,6 +24,8 @@ class DetectorName(str, Enum):
     IMAGE_ONLY_BODY = "image_only_body"
     # Recovers URLs hidden inside QR-code images ("quishing").
     QR_URL = "qr_url"
+    # Brand claimed in message content while sender and links are unrelated.
+    BRAND_CONTENT_MISMATCH = "brand_content_mismatch"
 
 
 class DetectorStatus(str, Enum):
