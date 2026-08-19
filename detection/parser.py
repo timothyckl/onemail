@@ -10,6 +10,7 @@ from typing import Final, Iterable, Optional, Set, Tuple
 
 from . import qr, textnorm
 from .brands import BRANDS, find_brand
+from .domains import registered_domain
 from .data_models import (
     AttachmentClass,
     AttachmentObservable,
@@ -359,8 +360,12 @@ class EmailParser:
 
         raw_reply_to = message.get("Reply-To")
         reply_to_domain = _address_domain(raw_reply_to)
+        # Compare registrable domains: bounce.example.com replying via
+        # example.com is the same registrant, not divergence.
         reply_to_differs = (
-            None if raw_reply_to is None else reply_to_domain != from_domain
+            None
+            if raw_reply_to is None
+            else registered_domain(reply_to_domain) != registered_domain(from_domain)
         )
         return _SenderObservables(
             from_domain=from_domain,

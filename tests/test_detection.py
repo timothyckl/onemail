@@ -429,6 +429,53 @@ class ExtraDetectorTests(unittest.TestCase):
         )
         self.assertIsInstance(result, ClearResult)
 
+    def test_parser_compares_reply_to_by_registrable_domain(self) -> None:
+        same_registrant = EmailParser().parse(
+            Email(
+                file="sub.eml",
+                content=email_bytes(
+                    sender="news@lockergnome.com",
+                    reply_to="news@sprocket.lockergnome.com",
+                ),
+            )
+        )
+        different_registrant = EmailParser().parse(
+            Email(
+                file="diff.eml",
+                content=email_bytes(
+                    sender="news@sender.example",
+                    reply_to="other@evil.example",
+                ),
+            )
+        )
+        self.assertFalse(same_registrant.reply_to_differs)
+        self.assertTrue(different_registrant.reply_to_differs)
+
+    def test_advance_fee_skips_on_mailing_list(self) -> None:
+        from detection.detectors import AdvanceFeeDetector
+
+        skipped = AdvanceFeeDetector().detect(
+            MessageObservables(
+                from_domain="member.example",
+                body_text="they claimed the inheritance was cursed",
+                reply_to_differs=True,
+                is_mailing_list=True,
+            )
+        )
+        self.assertIsInstance(skipped, SkippedResult)
+
+    def test_freemail_sender_skips_on_mailing_list(self) -> None:
+        from detection.detectors import FreemailSenderDetector
+
+        skipped = FreemailSenderDetector().detect(
+            MessageObservables(
+                from_domain="hotmail.com",
+                body_text="microsoft just bought another company",
+                is_mailing_list=True,
+            )
+        )
+        self.assertIsInstance(skipped, SkippedResult)
+
     def test_parser_marks_mailing_list_messages(self) -> None:
         message = EmailMessage()
         message["From"] = "member@example.org"

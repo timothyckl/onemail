@@ -319,6 +319,14 @@ class AdvanceFeeDetector(Detector[AdvanceFeeFinding]):
         if not matched_language:
             return ClearResult(detector=self.name)
 
+        if observables.is_mailing_list:
+            # List traffic quotes and discusses scams as news; the vocabulary
+            # alone cannot be judged as a lure there.
+            return SkippedResult(
+                detector=self.name,
+                reason="mailing-list message: scam vocabulary is discussion",
+            )
+
         sender = registered_domain(observables.from_domain)
         freemail_sender = sender in FREEMAIL_DOMAINS
         reply_to_differs = observables.reply_to_differs is True

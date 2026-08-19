@@ -61,6 +61,15 @@ class FreemailSenderDetector(Detector[FreemailSenderFinding]):
         if sender not in FREEMAIL_DOMAINS:
             return ClearResult(detector=self.name)
 
+        if observables.is_mailing_list:
+            # People post to distribution lists from consumer mailboxes and
+            # discuss brands and logins as topics; that context is not
+            # judgeable as a freemail impersonation lure.
+            return SkippedResult(
+                detector=self.name,
+                reason="mailing-list message from a consumer mailbox",
+            )
+
         text = message_text(observables)
         brand = find_content_brand(text) if text else None
         matched_language = (
