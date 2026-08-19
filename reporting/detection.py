@@ -32,6 +32,7 @@ from detection.detectors.brand_detectors import BRAND_DETECTORS
 from detection.detectors.detectors import CREDENTIAL_LANGUAGE, URGENCY_LANGUAGE
 from detection.detectors.extra_detectors import EXTRA_DETECTORS
 from detection.detectors.qr_detectors import QR_DETECTORS
+from detection.detectors.structural_detectors import STRUCTURAL_DETECTORS
 
 
 @dataclass(frozen=True)
@@ -229,7 +230,9 @@ class _FindingValidator:
     def __init__(self) -> None:
         self._extra_detectors = {
             detector.name: detector
-            for detector in EXTRA_DETECTORS + QR_DETECTORS + BRAND_DETECTORS
+            for detector in (
+                EXTRA_DETECTORS + QR_DETECTORS + BRAND_DETECTORS + STRUCTURAL_DETECTORS
+            )
         }
 
     def validate(self, detection: Detection) -> Tuple[ValidationIssue, ...]:

@@ -26,6 +26,11 @@ class DetectorName(str, Enum):
     QR_URL = "qr_url"
     # Brand claimed in message content while sender and links are unrelated.
     BRAND_CONTENT_MISMATCH = "brand_content_mismatch"
+    # Structural lure rules (subject obfuscation, abused hosting, 419, filler).
+    SUBJECT_OBFUSCATION = "subject_obfuscation"
+    SHARED_HOSTING_URL = "shared_hosting_url"
+    ADVANCE_FEE = "advance_fee"
+    GIBBERISH_BODY = "gibberish_body"
 
 
 class DetectorStatus(str, Enum):

@@ -24,14 +24,32 @@ from .extra_detectors import (
 )
 from .qr_detectors import QR_DETECTORS, QrUrlDetector
 from .brand_detectors import BRAND_DETECTORS, BrandContentMismatchDetector
+from .structural_detectors import (
+    STRUCTURAL_DETECTORS,
+    AdvanceFeeDetector,
+    GibberishBodyDetector,
+    SharedHostingUrlDetector,
+    SubjectObfuscationDetector,
+)
 
 # The engine imports DEFAULT_DETECTORS from this package, so extending it here
 # is all that is needed to activate the additional rules.
-DEFAULT_DETECTORS = BUILTIN_DETECTORS + EXTRA_DETECTORS + QR_DETECTORS + BRAND_DETECTORS
+DEFAULT_DETECTORS = (
+    BUILTIN_DETECTORS
+    + EXTRA_DETECTORS
+    + QR_DETECTORS
+    + BRAND_DETECTORS
+    + STRUCTURAL_DETECTORS
+)
 
 __all__ = [
+    "AdvanceFeeDetector",
     "AttachmentExtensionSpoofDetector",
     "AuthFailureDetector",
+    "GibberishBodyDetector",
+    "STRUCTURAL_DETECTORS",
+    "SharedHostingUrlDetector",
+    "SubjectObfuscationDetector",
     "BRAND_DETECTORS",
     "BecNoPayloadDetector",
     "BrandContentMismatchDetector",
