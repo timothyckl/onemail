@@ -11,6 +11,7 @@ same ``DetectorName`` / ``Severity`` enums as the built-in detectors.
 """
 
 import ipaddress
+import unicodedata
 from dataclasses import dataclass, field
 from typing import Final, Optional, Tuple, Union
 
@@ -88,6 +89,21 @@ ACTION_LANGUAGE: Final[Tuple[str, ...]] = (
 MIME_DEPTH_THRESHOLD: Final = 5
 IMAGE_ONLY_TEXT_THRESHOLD: Final = 40  # stripped-text chars below this = "no real text"
 
+# Common non-ASCII characters used to imitate Latin brand names. IDNA only
+# identifies an internationalised label; it does not make every such label a
+# homograph. Comparing a conservative skeleton avoids flagging legitimate IDNs.
+CONFUSABLE_TO_LATIN: Final = str.maketrans(
+    {
+        # Cyrillic
+        "а": "a", "е": "e", "о": "o", "р": "p", "с": "c", "х": "x",
+        "у": "y", "і": "i", "ј": "j", "ѕ": "s", "к": "k", "м": "m",
+        "т": "t", "в": "b", "н": "h",
+        # Greek
+        "α": "a", "ε": "e", "ι": "i", "κ": "k", "ο": "o", "ρ": "p",
+        "τ": "t", "υ": "y", "χ": "x",
+    }
+)
+
 
 # --------------------------------------------------------------------------- #
 # Small helpers
@@ -153,6 +169,47 @@ def _second_level_label(host: str) -> str:
 def _tld(host: str) -> str:
     labels = (host or "").strip(".").split(".")
     return labels[-1].lower() if labels else ""
+
+
+def _unicode_skeleton(label: str) -> str:
+    """Return a conservative ASCII-like skeleton for one decoded IDN label."""
+
+    normalised = unicodedata.normalize("NFKD", label.casefold()).translate(
+        CONFUSABLE_TO_LATIN
+    )
+    return "".join(
+        character
+        for character in normalised
+        if not unicodedata.combining(character) and character.isalnum()
+    )
+
+
+def _idn_brand_matches(host: str) -> Tuple[Tuple[str, bool], ...]:
+    """Return ``(brand, exact)`` matches for IDN labels in ``host``.
+
+    Exact skeleton matches are strong confusable signals. A one-edit match is
+    retained as a heuristic signal, matching the existing ASCII typosquat rule.
+    Ordinary internationalised labels with no brand resemblance return empty.
+    """
+
+    matches = []
+    for label in host.strip(".").lower().split("."):
+        if not label.startswith("xn--"):
+            continue
+        try:
+            decoded = label.encode("ascii").decode("idna")
+        except UnicodeError:
+            continue
+        skeleton = _unicode_skeleton(decoded)
+        for brand in LOOKALIKE_BRANDS:
+            distance = _levenshtein(skeleton, brand)
+            if distance == 0:
+                matches.append((brand, True))
+                break
+            if len(brand) >= 5 and distance == 1:
+                matches.append((brand, False))
+                break
+    return tuple(matches)
 
 
 # --------------------------------------------------------------------------- #
@@ -391,6 +448,12 @@ class NestedSenderMismatchDetector(Detector[NestedSenderMismatchFinding]):
             return ClearResult(detector=self.name)
 
         outer = registered_domain(observables.from_domain)
+        if outer is None:
+            return SkippedResult(
+                detector=self.name,
+                reason="no outer From domain to compare with nested sender",
+            )
+
         mismatched = []
         for nested in observables.nested_senders:
             # nested.sender is a full address string; pull its domain.
@@ -490,11 +553,18 @@ class LookalikeDomainDetector(Detector[LookalikeDomainFinding]):
         if not candidates:
             return SkippedResult(detector=self.name, reason="no domains to evaluate")
 
-        punycode_hosts = tuple(h for h in candidates if "xn--" in h.lower())
-
+        idn_hits = []
+        idn_matches = []
         typo_hits = []
         matched_brands = set()
         for host in candidates:
+            host_idn_matches = _idn_brand_matches(host)
+            if host_idn_matches:
+                idn_hits.append(host)
+                idn_matches.extend(host_idn_matches)
+                matched_brands.update(brand for brand, _exact in host_idn_matches)
+                continue
+
             label = _second_level_label(host)
             if not label or label in LOOKALIKE_BRANDS:
                 continue  # exact brand match is not a lookalike by itself
@@ -507,13 +577,13 @@ class LookalikeDomainDetector(Detector[LookalikeDomainFinding]):
                     matched_brands.add(brand)
                     break
 
-        if not punycode_hosts and not typo_hits:
+        if not idn_hits and not typo_hits:
             return ClearResult(detector=self.name)
 
-        suspect_hosts = tuple(dict.fromkeys(list(punycode_hosts) + typo_hits))[:5]
-        is_punycode = bool(punycode_hosts)
+        suspect_hosts = tuple(dict.fromkeys(idn_hits + typo_hits))[:5]
+        is_punycode = bool(idn_hits)
         clause = (
-            "domain uses punycode/homograph encoding"
+            "internationalised domain label resembles a known brand"
             if is_punycode
             else "domain closely resembles a known brand (possible typosquat)"
         )
@@ -524,7 +594,7 @@ class LookalikeDomainDetector(Detector[LookalikeDomainFinding]):
                 brands=tuple(sorted(matched_brands))[:5],
                 punycode=is_punycode,
             ),
-            heuristic=not is_punycode,
+            heuristic=bool(typo_hits) or any(not exact for _brand, exact in idn_matches),
         )
         return FiredResult(detector=self.name, finding=finding)
 

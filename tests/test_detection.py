@@ -278,21 +278,54 @@ class ExtraDetectorTests(unittest.TestCase):
         self.assertIsInstance(clear, ClearResult)
         self.assertIsInstance(skipped, SkippedResult)
 
-    def test_lookalike_domain_fires_on_typosquat_and_punycode(self) -> None:
+    def test_lookalike_domain_requires_brand_similarity(self) -> None:
         from detection.detectors import LookalikeDomainDetector
 
         typo = LookalikeDomainDetector().detect(
             MessageObservables(url_hosts=("paypa1.com",))
         )
-        puny = LookalikeDomainDetector().detect(
+        homograph = LookalikeDomainDetector().detect(
             MessageObservables(url_hosts=("xn--pypal-4ve.com",))
         )
-        clear = LookalikeDomainDetector().detect(
-            MessageObservables(from_domain="example.com", url_hosts=("example.com",))
+        legitimate_idn = LookalikeDomainDetector().detect(
+            MessageObservables(url_hosts=("xn--bcher-kva.de",))
         )
+
         self.assertIsInstance(typo, FiredResult)
-        self.assertIsInstance(puny, FiredResult)
-        self.assertIsInstance(clear, ClearResult)
+        assert isinstance(typo, FiredResult)
+        self.assertTrue(typo.finding.heuristic)
+        self.assertIsInstance(homograph, FiredResult)
+        assert isinstance(homograph, FiredResult)
+        self.assertFalse(homograph.finding.heuristic)
+        self.assertEqual(homograph.finding.evidence.brands, ("paypal",))
+        self.assertIsInstance(legitimate_idn, ClearResult)
+
+    def test_nested_sender_mismatch_requires_an_outer_sender(self) -> None:
+        from detection.data_models import NestedSender
+        from detection.detectors import NestedSenderMismatchDetector
+
+        nested = NestedSender(
+            sender="forwarder@other.example",
+            subject="Forwarded message",
+            reason="sender identity observed in a forwarded message",
+        )
+        skipped = NestedSenderMismatchDetector().detect(
+            MessageObservables(nested_senders=(nested,))
+        )
+        matching = NestedSenderMismatchDetector().detect(
+            MessageObservables(
+                from_domain="mail.other.example", nested_senders=(nested,)
+            )
+        )
+        mismatching = NestedSenderMismatchDetector().detect(
+            MessageObservables(
+                from_domain="corp.example", nested_senders=(nested,)
+            )
+        )
+
+        self.assertIsInstance(skipped, SkippedResult)
+        self.assertIsInstance(matching, ClearResult)
+        self.assertIsInstance(mismatching, FiredResult)
 
     def test_high_abuse_tld_requires_language(self) -> None:
         from detection.detectors import HighAbuseTldDetector

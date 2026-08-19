@@ -185,6 +185,45 @@ class QrBackendDegradationTests(unittest.TestCase):
             qr.decode_qr_urls(b"x" * (qr.MAX_IMAGE_BYTES + 1)), ()
         )
 
+    def test_pyzbar_fallback_runs_after_opencv_failure_or_empty_result(self) -> None:
+        original_opencv = qr._decode_opencv
+        original_pyzbar = qr._decode_pyzbar
+        try:
+            for opencv in (
+                lambda _image: [],
+                lambda _image: (_ for _ in ()).throw(RuntimeError("decode failed")),
+            ):
+                with self.subTest(opencv=opencv):
+                    qr._decode_opencv = opencv
+                    qr._decode_pyzbar = lambda _image: ["https://fallback.example/"]
+                    self.assertEqual(
+                        qr.decode_qr_urls(b"not-a-recognised-image-header"),
+                        ("https://fallback.example/",),
+                    )
+        finally:
+            qr._decode_opencv = original_opencv
+            qr._decode_pyzbar = original_pyzbar
+
+    def test_oversized_png_dimensions_are_rejected_before_decode(self) -> None:
+        calls = []
+        original_opencv = qr._decode_opencv
+        original_pyzbar = qr._decode_pyzbar
+        qr._decode_opencv = lambda _image: calls.append("opencv") or []
+        qr._decode_pyzbar = lambda _image: calls.append("pyzbar") or []
+        try:
+            width = qr.MAX_IMAGE_PIXELS + 1
+            png_header = (
+                b"\x89PNG\r\n\x1a\n"
+                b"\x00\x00\x00\rIHDR"
+                + width.to_bytes(4, "big")
+                + (1).to_bytes(4, "big")
+            )
+            self.assertEqual(qr.decode_qr_urls(png_header), ())
+            self.assertEqual(calls, [])
+        finally:
+            qr._decode_opencv = original_opencv
+            qr._decode_pyzbar = original_pyzbar
+
 
 if __name__ == "__main__":
     unittest.main()
