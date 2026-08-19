@@ -28,6 +28,7 @@ from detection.data_models import (
 )
 from detection import textnorm
 from detection.brands import brand_matches_domain
+from detection.domains import registered_domain as _registered_domain
 from detection.detectors.brand_detectors import BRAND_DETECTORS
 from detection.detectors.detectors import CREDENTIAL_LANGUAGE, URGENCY_LANGUAGE
 from detection.detectors.extra_detectors import EXTRA_DETECTORS
@@ -482,13 +483,6 @@ class _FindingValidator:
         message: str,
     ) -> None:
         issues.append(ValidationIssue(file=file, detector=detector, message=message))
-
-
-def _registered_domain(host: Optional[str]) -> Optional[str]:
-    if not host:
-        return None
-    labels = host.strip().strip(".").lower().split(".")
-    return ".".join(labels if len(labels) <= 2 else labels[-2:])
 
 
 def _message_text(detection: Detection) -> str:

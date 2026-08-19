@@ -25,6 +25,7 @@ from ..data_models import (
 
 from .base import Detector
 from ..brands import brand_matches_domain
+from ..domains import registered_domain as _registered_domain
 from .lexicon import ADVANCE_FEE_LANGUAGE, CREDENTIAL_LANGUAGE, URGENCY_LANGUAGE
 from .. import textnorm
 
@@ -216,16 +217,16 @@ class BecNoPayloadDetector(Detector[BecNoPayloadFinding]):
 
 
 def registered_domain(host: Optional[str]) -> Optional[str]:
-    """Return the final two DNS labels used by the existing detector contract.
+    """Return the registrable domain for ``host``.
 
-    This deliberately preserves the current simple comparison. It does not implement the
-    public suffix list and therefore does not fully handle domains such as ``example.co.uk``.
+    Delegates to ``detection.domains.registered_domain``, which understands
+    multi-label public suffixes (``example.co.uk``, ``example.com.br``) and
+    shared-hosting platforms whose subdomains are separate tenants
+    (``tenant.firebaseapp.com``). Unlisted suffixes keep the original
+    final-two-labels behaviour.
     """
 
-    if not host:
-        return None
-    labels = host.strip().strip(".").lower().split(".")
-    return ".".join(labels if len(labels) <= 2 else labels[-2:])
+    return _registered_domain(host)
 
 
 def message_text(observables: MessageObservables) -> str:
