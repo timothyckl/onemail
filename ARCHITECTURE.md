@@ -57,12 +57,19 @@ Two independent side channels sit alongside the pipeline:
 ├── detection/             Stage 1 — deterministic detection
 │   ├── engine.py            DetectionEngine: parse once, run all detectors
 │   ├── parser.py            EmailParser: raw bytes → MessageObservables
+│   ├── textnorm.py          Unicode normalization (homoglyph/entity folding)
+│   ├── brands.py            Brand vocabulary + legitimate-domain map
+│   ├── domains.py           Suffix-aware registrable-domain derivation
 │   ├── qr.py                Optional QR-code decoding (quishing recovery)
 │   ├── detectors/           The deterministic rules
 │   │   ├── base.py            Detector ABC (typed, generic over Finding)
 │   │   ├── detectors.py       5 core detectors
+│   │   ├── lexicon.py         Multilingual phrase lexicons (data module)
 │   │   ├── extra_detectors.py 10 additional detectors
-│   │   └── qr_detectors.py    QR-URL detector (quishing)
+│   │   ├── qr_detectors.py    QR-URL detector (quishing)
+│   │   ├── brand_detectors.py Brand content-mismatch detector
+│   │   ├── structural_detectors.py  4 structural lure detectors
+│   │   └── freemail_detectors.py    Freemail-sender detector
 │   └── data_models/         Standalone, dependency-light typed models
 │       ├── email.py           Email (file + raw bytes)
 │       ├── observables.py     MessageObservables + sub-observables
@@ -116,7 +123,15 @@ Two independent side channels sit alongside the pipeline:
 │
 ├── tests/                 unittest suite
 │   ├── test_detection.py
-│   ├── test_phishing_pot.py
+│   ├── test_phishing_pot.py       corpus coverage + recall floor
+│   ├── test_textnorm.py           Unicode normalization pipeline
+│   ├── test_lexicon.py            phrase lexicon contracts + multilingual e2e
+│   ├── test_brands.py             brand vocabulary + content mismatch
+│   ├── test_structural_detectors.py  structural lure rules
+│   ├── test_domains.py            registrable-domain derivation
+│   ├── test_freemail.py           freemail rule + auth-pass semantics
+│   ├── test_ham.py                false-positive guard over tests/ham/
+│   ├── ham/                       legitimate .eml fixtures (must stay clean)
 │   ├── test_agentic.py            fakes only, never calls a real model
 │   └── test_agentic_docker.py     skips unless Docker + image are present
 │
@@ -144,7 +159,7 @@ agentic dependencies.
 | Type | Role |
 | --- | --- |
 | `Email` | One email file: a `file` name and unmodified RFC 822 `content` bytes. |
-| `MessageObservables` | Everything the parser extracts: subject/body, MIME depth, From/Reply-To domains, SPF/DMARC results, URLs and URL hosts, **URLs recovered from QR-code images** (`image_urls`, also merged into `urls`), attachments, duplicate headers, nested senders, sender IPs, received timeline. |
+| `MessageObservables` | Everything the parser extracts: subject/body, **normalized subject/body** (`normalized_subject`, `normalized_body_text` — Unicode-folded for phrase matching) plus obfuscation counts (`subject_confusable_count`, `body_combining_mark_count`), MIME depth, From/Reply-To domains, the display-name brand (matched against the folded name), SPF/DMARC results, URLs and URL hosts, **URLs recovered from QR-code images** (`image_urls`, also merged into `urls`), attachments, duplicate headers, nested senders, sender IPs, received timeline. |
 | `AttachmentObservable`, `DuplicateHeader`, `NestedSender`, `SenderIp` | Sub-observables referenced by the message. |
 | `Finding` (+ per-detector subclasses) | What a *fired* detector emits, carrying typed `evidence`. |
 | `DetectorEvidence` (+ subclasses) | The concrete facts behind a finding, so every claim is traceable. |
@@ -174,7 +189,8 @@ side-effect free.
 Detectors are subclasses of the generic `Detector[T]` ABC. Each declares a
 `DetectorName` and implements `detect(observables) -> Fired | Clear | Skipped`.
 The engine's default set is assembled in `detectors/__init__.py` as
-`DEFAULT_DETECTORS = BUILTIN_DETECTORS + EXTRA_DETECTORS + QR_DETECTORS`, so
+`DEFAULT_DETECTORS = BUILTIN_DETECTORS + EXTRA_DETECTORS + QR_DETECTORS +
+BRAND_DETECTORS + STRUCTURAL_DETECTORS + FREEMAIL_DETECTORS` (22 rules), so
 activating a new rule is a one-line change there.
 
 **Core detectors** (`detectors.py`):
@@ -183,8 +199,8 @@ activating a new rule is a one-line change there.
 | --- | --- |
 | `auth_failure` | SPF/DKIM/DMARC authentication failed or is missing. |
 | `reply_to_divergence` | `Reply-To` domain diverges from the `From` domain. |
-| `credential_url` | A link points at a credential-harvesting destination. |
-| `display_name_spoof` | Display name impersonates a known brand. |
+| `credential_url` | A link to a host unrelated to the sender, paired with credential-action language. |
+| `display_name_spoof` | Display name impersonates a known brand (matched on the Unicode-folded name, cleared via the brand's legitimate-domain map). |
 | `bec_no_payload` | Business-email-compromise pattern with no link/attachment. |
 
 **Extra detectors** (`extra_detectors.py`):
@@ -208,8 +224,65 @@ activating a new rule is a one-line change there.
 | --- | --- |
 | `qr_url` | A QR code inside an image encodes a link to a domain unrelated to the sender. |
 
+**Brand detector** (`brand_detectors.py`):
+
+| Name | Signal |
+| --- | --- |
+| `brand_content_mismatch` | Subject or body claims a known brand while the sender domain *and* every linked host are unrelated to it. |
+
+**Structural lure detectors** (`structural_detectors.py`):
+
+| Name | Signal |
+| --- | --- |
+| `subject_obfuscation` | Combining-mark or mixed-script homoglyph obfuscation in the subject (genuinely non-Latin mail stays clear). |
+| `shared_hosting_url` | Link on an abused free-hosting / serverless / shortener platform unrelated to the sender, paired with lure language or a brand claim. |
+| `advance_fee` | Prize / lottery / 419 vocabulary combined with a structural oddity (freemail sender, Reply-To divergence, no payload, or an unrelated link host). |
+| `gibberish_body` | Body padded with vowel-free filler tokens (CSS hex colours excluded) plus a link to an unrelated host. |
+
+**Freemail detector** (`freemail_detectors.py`):
+
+| Name | Signal |
+| --- | --- |
+| `freemail_sender` | Consumer-mailbox sender claiming a brand or using credential-action language. |
+
 Each detector ships with its own typed evidence and finding classes, so a fired
 result always carries structured proof rather than a free-text reason.
+
+### Text normalization, lexicons, and shared vocabulary
+
+Phrase and brand rules never match raw text. `detection/textnorm.py` folds
+HTML entities, NFKC/NFKD compatibility forms, combining marks, and a
+conservative Cyrillic/Greek homoglyph map into plain lower-case Latin, so
+`[Wallеt Suspеnded]`, `Aܿmܿaܿzܿon`, and mathematical-italic lures match their
+plain spellings. The parser stores the folded text on the observables
+(`normalized_subject`, `normalized_body_text`) together with obfuscation
+counts, which the `subject_obfuscation` rule consumes.
+
+Three static data modules back the rules:
+
+- **`detectors/lexicon.py`** — `CREDENTIAL_LANGUAGE` (~120 phrases),
+  `URGENCY_LANGUAGE` (~28), and `ADVANCE_FEE_LANGUAGE` (~36) across English,
+  Portuguese, Spanish, French, German, Dutch, and Italian. Every entry is a
+  fixed point of `textnorm.normalize` (unit-tested), so no phrase can be
+  silently dead.
+- **`brands.py`** — 60 brand names (crypto exchanges/wallets, Brazilian
+  banking/retail/loyalty, card networks, tech, telecom, logistics) with
+  left-token-bounded matching and a brand → legitimate-registered-domains map
+  used to keep real brand mail clear.
+- **`domains.py`** — `registered_domain()` with a vendored static suffix list:
+  multi-label public suffixes (`co.uk`, `com.br`, …) plus shared-hosting
+  platform suffixes (`firebaseapp.com`, `s3.amazonaws.com`, …) whose
+  subdomains are separate tenants. Unlisted suffixes keep the original
+  two-label rule. Every sender/link comparison in the detector set uses this
+  one implementation, as does the reporting validator.
+
+### Authentication semantics
+
+SPF/DMARC **failure** fires `auth_failure`; a **pass is never exculpatory** —
+attackers pass both on mailboxes they own, and most of the corpus passes SPF.
+No detector consults authentication results to suppress a finding, and a
+regression test (`test_freemail.py`) asserts that identical content produces
+identical fired detectors with and without passing `Authentication-Results`.
 
 ### QR / quishing recovery
 
@@ -328,13 +401,19 @@ Markdown.
 detection coverage over a corpus. `DetectionReport.build(records)` takes a batch
 of `DetectionRecord`s and, as part of building, **automatically validates** that
 every finding and its evidence are grounded in the parsed observables — callers
-never invoke validation separately. The report exposes counts (discovered,
-processed, unreadable, parse-failure, flagged/unflagged), the positive-detection
-rate, a `summary()` string, `to_dict()`, and `write_json()`.
+never invoke validation separately. Core-detector findings are reconstructed
+field by field; findings from every other detector are grounded by
+**re-running the pure detector** on the same observables and requiring an
+identical finding, so tampered evidence is always reported. The report exposes
+counts (discovered, processed, unreadable, parse-failure, flagged/unflagged),
+the positive-detection rate, a `summary()` string, `to_dict()`, and
+`write_json()`.
 
 Because the honeypot corpus is entirely positively labelled, this measures
 **positive-detection coverage only** — not precision or false-positive rate.
-Unflagged samples mark coverage gaps for future detectors.
+The corpus test enforces a recall floor (currently 0.75; the stage flags about
+79%), while precision is guarded by the `tests/ham/` fixture corpus on which no
+detector may fire. Unflagged samples mark coverage gaps for future detectors.
 
 ---
 
@@ -389,7 +468,10 @@ repository root to `sys.path`, so it can run from the `web/` directory.
   python scripts/investigate_email.py path/to/email.eml --output reports
   ```
 
-- **Tests:** `python -m unittest discover -s tests -v`. Agentic tests use fakes
+- **Tests:** `python -m unittest discover -s tests -v`. The corpus suite
+  enforces the detection recall floor, and `test_ham.py` enforces zero
+  false positives on the legitimate fixtures in `tests/ham/` — any new
+  detector or lexicon entry must keep both green. Agentic tests use fakes
   and never call a real model; the Docker integration test skips unless the SDK,
   daemon, and image are present.
 

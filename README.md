@@ -16,9 +16,23 @@ Initial detection is always deterministic. Agentic analysis does not decide whet
 
 1. Receive raw email bytes as `Email`.
 2. Parse headers, body, URLs, authentication results, and attachment metadata.
+   Subject and body text are additionally **Unicode-normalized** (HTML entities,
+   homoglyphs, combining marks, and mathematical letters folded to plain
+   lower-case Latin) so obfuscated text matches what a human reads.
 3. Run each deterministic detector against the parsed observables.
 4. Collect fired, clear, and skipped detector results.
 5. Return a `Detection` indicating whether the email was flagged.
+
+The default detector set contains 22 rules across six groups: core header and
+URL rules, structural MIME/attachment rules, QR ("quishing") recovery, brand
+impersonation (a 60-brand vocabulary with a legitimate-domain map, applied to
+display names and message content), structural lures (subject obfuscation,
+abused free-hosting and shortener platforms, advance-fee/prize language,
+gibberish body padding), and a freemail-sender rule. Phrase matching uses
+multilingual lexicons (English, Portuguese, Spanish, French, German, Dutch,
+Italian), and sender/link comparisons use a suffix-aware registrable-domain
+derivation (`example.com.br` and `tenant.firebaseapp.com` are handled
+correctly). SPF/DMARC *failure* is a signal; a *pass* is never exculpatory.
 
 ```python
 from detection import DetectionEngine, Email
@@ -42,8 +56,12 @@ python -m scripts.detect_email dataset/phishing_pot/email/sample-2.eml
 
 All samples are labelled `"phishing"`, so the corpus measures positive detection coverage only, not precision or false-positive rate.
 
-Current deterministic detectors cover a narrow set of phishing signals.
-Unflagged samples represent coverage gaps for future detector improvements.
+The deterministic stage currently flags about 79% of the corpus, and
+`tests/test_phishing_pot.py` enforces a recall floor (currently 0.75) so
+coverage cannot silently regress. Precision is guarded separately by a small
+legitimate-mail fixture corpus in `tests/ham/`, on which no detector may fire.
+Remaining unflagged samples represent coverage gaps for future detector
+improvements.
 
 The dataset API is independent of detection:
 
@@ -239,7 +257,15 @@ installs.
 
 ## Tests
 
-The corpus tests use the checked-out Phishing Pot samples directly. Agentic unit
+The corpus tests use the checked-out Phishing Pot samples directly and enforce
+the detection recall floor. `tests/ham/` holds legitimate fixtures written to be
+adversarial for the detection rules (brand password resets with credential
+language, CDN-backed newsletters, freemail personal mail); `tests/test_ham.py`
+asserts that zero detectors fire on them. Unit suites cover the normalization
+pipeline (`test_textnorm.py`), phrase lexicons (`test_lexicon.py`), brand rules
+(`test_brands.py`), structural lure detectors (`test_structural_detectors.py`),
+registrable-domain derivation (`test_domains.py`), and the freemail rule plus
+auth-pass semantics (`test_freemail.py`). Agentic unit
 tests use safe in-memory messages plus fake models and sandboxes; they never call
 a real model. Run from the repository root:
 
