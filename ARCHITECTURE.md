@@ -110,26 +110,34 @@ Two independent side channels sit alongside the pipeline:
 │
 ├── dataset/               Phishing-corpus access (data, not detection)
 │   ├── phishing.py          PhishingPot + PhishingEmail
-│   └── phishing_pot/        Corpus location (samples supplied separately)
-│       ├── README.md
-│       └── email/.gitkeep
+│   ├── phishing_pot/        Corpus location (email/ links to ../../email/phishing_pot)
+│   ├── spamassassin/        Downloaded corpus archives (gitignored cache)
+│   └── nazario/             Downloaded source mboxes (gitignored cache)
+│
+├── email/                 Evaluation corpora, one gitignored folder per corpus
+│   └── {phishing_pot,easy_ham,easy_ham_2,hard_ham,spam,spam_2,nazario}/
 │
 ├── scripts/               Runnable entry points (python -m scripts.*)
 │   ├── detect_email.py          Detect one .eml
 │   ├── detect_phishing_pot.py   Detect across the corpus
 │   ├── read_phishing_pot.py     List corpus samples
 │   ├── report_phishing_pot.py   Write a validated coverage report
+│   ├── measure_detection.py     Per-corpus rates + per-detector fire/solo table
+│   ├── detect_spamassassin.py   SpamAssassin ham/spam metrics + confusion matrix
+│   ├── detect_nazario.py        Nazario per-source phishing recall
 │   └── investigate_email.py     Full pipeline with Docker + LM Studio
 │
 ├── tests/                 unittest suite
 │   ├── test_detection.py
 │   ├── test_phishing_pot.py       corpus coverage + recall floor
+│   ├── test_corpus_gates.py       ham FP ceiling + Nazario floor (skip if absent)
 │   ├── test_textnorm.py           Unicode normalization pipeline
 │   ├── test_lexicon.py            phrase lexicon contracts + multilingual e2e
 │   ├── test_brands.py             brand vocabulary + content mismatch
 │   ├── test_structural_detectors.py  structural lure rules
 │   ├── test_domains.py            registrable-domain derivation
 │   ├── test_freemail.py           freemail rule + auth-pass semantics
+│   ├── test_qr.py                 QR/quishing recovery
 │   ├── test_ham.py                false-positive guard over tests/ham/
 │   ├── ham/                       legitimate .eml fixtures (must stay clean)
 │   ├── test_agentic.py            fakes only, never calls a real model
@@ -142,11 +150,15 @@ Two independent side channels sit alongside the pipeline:
     └── samples/sample-1-intelligence.md
 ```
 
-> **Note on the email corpus.** OneMail is exercised against thousands of real
-> honeypot `.eml` files. Those are *data*, not source, and are deliberately kept
-> out of the repository (the `email/` and `dataset/phishing_pot/email/` trees are
-> gitignored). Drop the samples into `dataset/phishing_pot/email/` before running
-> the corpus scripts.
+> **Note on the evaluation corpora.** OneMail is exercised against tens of
+> thousands of real `.eml` files. Those are *data*, not source, and are
+> deliberately kept out of the repository (the `email/` and
+> `dataset/phishing_pot/email/` trees are gitignored). `email/` holds one
+> folder per corpus — `phishing_pot/` (honeypot phishing;
+> `dataset/phishing_pot/email` is a symlink to it), the SpamAssassin public
+> corpus (`easy_ham/`, `easy_ham_2/`, `hard_ham/`, `spam/`, `spam_2/`), and
+> `nazario/` (the Nazario mboxes split into one `.eml` per message). The
+> labelled ham/spam corpora are what precision is measured and gated on.
 
 ---
 
@@ -159,7 +171,7 @@ agentic dependencies.
 | Type | Role |
 | --- | --- |
 | `Email` | One email file: a `file` name and unmodified RFC 822 `content` bytes. |
-| `MessageObservables` | Everything the parser extracts: subject/body, **normalized subject/body** (`normalized_subject`, `normalized_body_text` — Unicode-folded for phrase matching) plus obfuscation counts (`subject_confusable_count`, `body_combining_mark_count`), MIME depth, From/Reply-To domains, the display-name brand (matched against the folded name), SPF/DMARC results, URLs and URL hosts, **URLs recovered from QR-code images** (`image_urls`, also merged into `urls`), attachments, duplicate headers, nested senders, sender IPs, received timeline. |
+| `MessageObservables` | Everything the parser extracts: subject/body, **normalized subject/body** (`normalized_subject`, `normalized_body_text` — Unicode-folded for phrase matching) plus obfuscation counts (`subject_confusable_count`, `body_combining_mark_count`), MIME depth, From/Reply-To domains (divergence compared on registrable domains), a **mailing-list marker** (`is_mailing_list`, from `List-Id`/`List-Post`/`Mailing-List`/`Precedence: list` — `List-Unsubscribe` and `Precedence: bulk` deliberately do not count, as bulk marketing and phishing add both freely), the display-name brand (matched against the folded name), SPF/DMARC results, URLs and URL hosts, **URLs recovered from QR-code images** (`image_urls`, also merged into `urls`), attachments, duplicate headers, nested senders, sender IPs, received timeline. |
 | `AttachmentObservable`, `DuplicateHeader`, `NestedSender`, `SenderIp` | Sub-observables referenced by the message. |
 | `Finding` (+ per-detector subclasses) | What a *fired* detector emits, carrying typed `evidence`. |
 | `DetectorEvidence` (+ subclasses) | The concrete facts behind a finding, so every claim is traceable. |
@@ -198,8 +210,8 @@ activating a new rule is a one-line change there.
 | Name | Signal |
 | --- | --- |
 | `auth_failure` | SPF/DKIM/DMARC authentication failed or is missing. |
-| `reply_to_divergence` | `Reply-To` domain diverges from the `From` domain. |
-| `credential_url` | A link to a host unrelated to the sender, paired with credential-action language. |
+| `reply_to_divergence` | `Reply-To` registrable domain diverges from the `From` registrable domain (subdomains are the same registrant). Skips mailing-list traffic, where Reply-To rewriting is expected. |
+| `credential_url` | A link to a host unrelated to the sender, paired with credential-action language. A lone generic token (`login`, `signin`, `log in`) never fires alone; a real phrase or two distinct matches is required. |
 | `display_name_spoof` | Display name impersonates a known brand (matched on the Unicode-folded name, cleared via the brand's legitimate-domain map). |
 | `bec_no_payload` | Business-email-compromise pattern with no link/attachment. |
 
@@ -209,10 +221,10 @@ activating a new rule is a one-line change there.
 | --- | --- |
 | `dangerous_attachment` | Executable / high-risk attachment type. |
 | `attachment_extension_spoof` | Declared extension disagrees with real type. |
-| `duplicate_header_conflict` | Conflicting duplicate headers (e.g. two `From`). |
+| `duplicate_header_conflict` | Conflicting duplicate identity headers (e.g. two `From`). `Return-Path` is exempt: local re-delivery legitimately accumulates one per hop. |
 | `nested_sender_mismatch` | Inner forwarded sender contradicts the outer one. |
 | `deep_mime_nesting` | Suspiciously deep MIME structure. |
-| `private_sender_ip` | Sender IP is in private/reserved space. |
+| `private_sender_ip` | The chain shows only private/reserved origin IPs and no public one. Loopback-only chains (fetchmail-style local re-delivery) are unobservable and skip. |
 | `raw_ip_url` | URL uses a raw IP address instead of a hostname. |
 | `lookalike_domain` | Homoglyph / typosquat lookalike domain. |
 | `high_abuse_tld` | Domain sits in a high-abuse TLD. |
@@ -228,7 +240,7 @@ activating a new rule is a one-line change there.
 
 | Name | Signal |
 | --- | --- |
-| `brand_content_mismatch` | Subject or body claims a known brand while the sender domain *and* every linked host are unrelated to it. |
+| `brand_content_mismatch` | Message claims a known brand while the sender domain *and* every linked host are unrelated to it. Requires impersonation context — the brand in the subject or display name, or credential/urgency lure language — so a brand merely mentioned in running body text stays clear, and skips mailing-list traffic, where brands are discussed as news. |
 
 **Structural lure detectors** (`structural_detectors.py`):
 
@@ -236,14 +248,14 @@ activating a new rule is a one-line change there.
 | --- | --- |
 | `subject_obfuscation` | Combining-mark or mixed-script homoglyph obfuscation in the subject (genuinely non-Latin mail stays clear). |
 | `shared_hosting_url` | Link on an abused free-hosting / serverless / shortener platform unrelated to the sender, paired with lure language or a brand claim. |
-| `advance_fee` | Prize / lottery / 419 vocabulary combined with a structural oddity (freemail sender, Reply-To divergence, no payload, or an unrelated link host). |
+| `advance_fee` | Prize / lottery / 419 vocabulary combined with a structural oddity (freemail sender, Reply-To divergence, no payload, or an unrelated link host). Skips mailing-list traffic, which quotes scams as news. |
 | `gibberish_body` | Body padded with vowel-free filler tokens (CSS hex colours excluded) plus a link to an unrelated host. |
 
 **Freemail detector** (`freemail_detectors.py`):
 
 | Name | Signal |
 | --- | --- |
-| `freemail_sender` | Consumer-mailbox sender claiming a brand or using credential-action language. |
+| `freemail_sender` | Consumer-mailbox sender claiming a brand or using credential-action language. Skips mailing-list traffic: people post to lists from consumer mailboxes. |
 
 Each detector ships with its own typed evidence and finding classes, so a fired
 result always carries structured proof rather than a free-text reason.
@@ -283,6 +295,29 @@ attackers pass both on mailboxes they own, and most of the corpus passes SPF.
 No detector consults authentication results to suppress a finding, and a
 regression test (`test_freemail.py`) asserts that identical content produces
 identical fired detectors with and without passing `Authentication-Results`.
+
+### Precision against legitimate mail
+
+Every precision rule above was landed against measurement, not intuition: the
+engine is run over labelled corpora (SpamAssassin ham/spam, Nazario phishing,
+Phishing Pot) and each false positive is attributed to the single detector
+whose removal would un-flag the message (the *solo-cause* table printed by
+`scripts/measure_detection.py`). A change ships only when the measured ham
+gain clearly outweighs the measured phishing cost — e.g. requiring two
+advance-fee phrases was evaluated and **rejected** (it cost 276 phishing
+catches to save 18 ham messages), while skipping mailing-list traffic and
+comparing registrable domains were accepted. The result on the SpamAssassin
+ham corpus is a 44.99% → 2.19% false-positive reduction, traded against
+roughly six points of corpus recall (single-signal catches: lone credential
+tokens, contextless brand mentions, list Reply-To divergence).
+
+Three gates keep both sides of that trade from regressing silently:
+`tests/test_phishing_pot.py` (recall floor 0.72), `tests/test_corpus_gates.py`
+(3% ham false-positive ceiling, 0.65 Nazario recall floor; both skip when the
+local-only corpora are absent), and `tests/test_ham.py` (zero findings on the
+fixture corpus, which includes the measured false-positive archetypes:
+rewritten list Reply-To, loopback delivery chains, brand discussion, and an
+advisory containing the word "login").
 
 ### QR / quishing recovery
 
@@ -411,9 +446,10 @@ the positive-detection rate, a `summary()` string, `to_dict()`, and
 
 Because the honeypot corpus is entirely positively labelled, this measures
 **positive-detection coverage only** — not precision or false-positive rate.
-The corpus test enforces a recall floor (currently 0.75; the stage flags about
-79%), while precision is guarded by the `tests/ham/` fixture corpus on which no
-detector may fire. Unflagged samples mark coverage gaps for future detectors.
+The corpus test enforces a recall floor (currently 0.72; the stage flags about
+72%), while precision is measured on the SpamAssassin ham corpus (2.19%
+false positives, gated at 3% by `tests/test_corpus_gates.py`) and guarded by
+the `tests/ham/` fixture corpus on which no detector may fire. Unflagged samples mark coverage gaps for future detectors.
 
 ---
 
@@ -495,13 +531,13 @@ following were removed or corrected; **no source behaviour was changed.**
   `dataset/phishing_pot/README.md` explaining the corpus location.
 - Tightened `.gitignore` so the same cruft cannot creep back.
 
-### Known documentation gaps (left as-is, not code changes)
+A later pass reorganised the evaluation data and reconciled the remaining
+prose gaps:
 
-- `README.md` refers to `agentic/NOTES.md`, which is not present in this tree.
-- The web section of `README.md` describes a root-level layout, whereas the app
-  actually lives self-contained under `web/` (its `app.py` adds the repo root to
-  `sys.path`, so it still runs). The bundled sample is
-  `web/samples/sample-1-intelligence.md`.
-
-These are content mismatches in the prose only and were left for a maintainer to
-reconcile, since resolving them touches intent rather than structure.
+- `email/` became the single home for all evaluation corpora (one gitignored
+  folder per corpus), with `dataset/phishing_pot/email` a symlink into it;
+  generated corpus reports and downloaded archives are gitignored.
+- The web console section of `README.md` now describes the actual `web/`
+  layout, and the stale `agentic/NOTES.md` reference was removed.
+- Corpus measurement moved from ad-hoc runs into `scripts/measure_detection.py`
+  plus the regression gates in `tests/test_corpus_gates.py`.

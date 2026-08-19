@@ -100,9 +100,10 @@ app.config["MAX_CONTENT_LENGTH"] = 25 * 1024 * 1024  # 25 MB per upload.
 ENGINE = DetectionEngine()
 
 # Where bundled sample emails may live, in priority order. These are the corpus
-# directories the OneMail repo already ships with (found under the repo root).
+# directories a local checkout may carry (see the evaluation-corpora layout in
+# ARCHITECTURE.md; ``email/`` holds one gitignored folder per corpus).
 SAMPLE_DIRS: Tuple[Path, ...] = (
-    REPO_ROOT / "email",
+    REPO_ROOT / "email" / "phishing_pot",
     REPO_ROOT / "dataset" / "phishing_pot" / "email",
 )
 SAMPLE_NAME = re.compile(r"^sample-\d+\.eml$")

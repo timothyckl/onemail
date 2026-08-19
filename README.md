@@ -34,6 +34,15 @@ Italian), and sender/link comparisons use a suffix-aware registrable-domain
 derivation (`example.com.br` and `tenant.firebaseapp.com` are handled
 correctly). SPF/DMARC *failure* is a signal; a *pass* is never exculpatory.
 
+The rules are precision-engineered against legitimate mail: mailing-list
+traffic (detected via `List-Id`/`List-Post`/`Mailing-List` headers) is not
+judged for Reply-To divergence, brand mentions, scam vocabulary, or freemail
+sending; Reply-To comparisons use registrable domains; loopback-only delivery
+chains are treated as unobservable; and a brand or credential word alone never
+fires without impersonation context. Measured on the SpamAssassin public ham
+corpus, these behaviours cut the false-positive rate twenty-fold (see
+**Evaluation corpora** below).
+
 ```python
 from detection import DetectionEngine, Email
 
@@ -56,12 +65,12 @@ python -m scripts.detect_email dataset/phishing_pot/email/sample-2.eml
 
 All samples are labelled `"phishing"`, so the corpus measures positive detection coverage only, not precision or false-positive rate.
 
-The deterministic stage currently flags about 79% of the corpus, and
-`tests/test_phishing_pot.py` enforces a recall floor (currently 0.75) so
-coverage cannot silently regress. Precision is guarded separately by a small
-legitimate-mail fixture corpus in `tests/ham/`, on which no detector may fire.
-Remaining unflagged samples represent coverage gaps for future detector
-improvements.
+The deterministic stage currently flags about 72% of the corpus, and
+`tests/test_phishing_pot.py` enforces a recall floor (currently 0.72) so
+coverage cannot silently regress. Precision is guarded separately by a
+legitimate-mail fixture corpus in `tests/ham/`, on which no detector may fire,
+and by the corpus gates described under **Evaluation corpora**. Remaining
+unflagged samples represent coverage gaps for future detector improvements.
 
 The dataset API is independent of detection:
 
@@ -103,6 +112,39 @@ Runnable example:
 ```bash
 python -m scripts.report_phishing_pot
 ```
+
+## Evaluation corpora
+
+Beyond the all-positive Phishing Pot corpus, detection is measured against
+public labelled corpora. All corpora are local-only downloads that live in one
+gitignored folder per corpus under `email/`:
+
+```
+email/
+├── phishing_pot/   real honeypot phishing (dataset/phishing_pot/email links here)
+├── easy_ham/       SpamAssassin public corpus (20030228)
+├── easy_ham_2/
+├── hard_ham/
+├── spam/
+├── spam_2/
+└── nazario/        Nazario phishing corpus, split from the source mboxes
+```
+
+The SpamAssassin archives come from
+<https://spamassassin.apache.org/old/publiccorpus/> and the Nazario mboxes from
+<https://monkey.org/~jose/phishing/>. Three harnesses report on them:
+
+```bash
+python -m scripts.measure_detection    # per-corpus rates + per-detector table
+python -m scripts.detect_spamassassin  # ham/spam confusion matrix and metrics
+python -m scripts.detect_nazario       # per-source phishing recall
+```
+
+Current measurements: **2.19%** false positives on 4,150 SpamAssassin ham,
+**72.15%** recall on 8,614 Phishing Pot samples, **66.41%** recall on 12,010
+Nazario samples. `tests/test_corpus_gates.py` enforces a 3% ham false-positive
+ceiling and a 0.65 Nazario recall floor whenever the corpora are present
+(the gates skip cleanly otherwise).
 
 ## Agentic Investigation
 
@@ -174,8 +216,7 @@ markdown_report = Renderer().render(report)
 ```
 
 The report uses the Diamond Model, MITRE ATT&CK, and the Cyber Kill Chain. It
-contains no maliciousness verdict or action decision. Deferred capabilities and
-provider placeholders are recorded in `agentic/NOTES.md`.
+contains no maliciousness verdict or action decision.
 
 ### End-to-End Example
 
@@ -258,16 +299,20 @@ installs.
 ## Tests
 
 The corpus tests use the checked-out Phishing Pot samples directly and enforce
-the detection recall floor. `tests/ham/` holds legitimate fixtures written to be
-adversarial for the detection rules (brand password resets with credential
-language, CDN-backed newsletters, freemail personal mail); `tests/test_ham.py`
-asserts that zero detectors fire on them. Unit suites cover the normalization
-pipeline (`test_textnorm.py`), phrase lexicons (`test_lexicon.py`), brand rules
-(`test_brands.py`), structural lure detectors (`test_structural_detectors.py`),
-registrable-domain derivation (`test_domains.py`), and the freemail rule plus
-auth-pass semantics (`test_freemail.py`). Agentic unit
-tests use safe in-memory messages plus fake models and sandboxes; they never call
-a real model. Run from the repository root:
+the detection recall floor; `tests/test_corpus_gates.py` adds the SpamAssassin
+ham false-positive ceiling and the Nazario recall floor when those corpora are
+downloaded. `tests/ham/` holds legitimate fixtures written to be adversarial
+for the detection rules (brand password resets with credential language,
+CDN-backed newsletters, freemail personal mail, mailing-list traffic with
+rewritten Reply-To headers and brand discussion, a loopback-only delivery
+chain); `tests/test_ham.py` asserts that zero detectors fire on them. Unit
+suites cover the normalization pipeline (`test_textnorm.py`), phrase lexicons
+(`test_lexicon.py`), brand rules (`test_brands.py`), structural lure detectors
+(`test_structural_detectors.py`), registrable-domain derivation
+(`test_domains.py`), and the freemail rule plus auth-pass semantics
+(`test_freemail.py`). Agentic unit tests use safe in-memory messages plus fake
+models and sandboxes; they never call a real model. Run from the repository
+root:
 
 ```bash
 python -m unittest discover -s tests -v
@@ -301,32 +346,32 @@ renders uploaded Markdown reports independently of the pipeline.
 
 ## Layout
 
-These files belong at the OneMail repository root, next to `detection/`,
-`reporting/`, and `dataset/`:
+The console lives self-contained under `web/`:
 
 ```
-app.py                 # the Flask application
-requirements-web.txt   # Flask + markdown
-templates/index.html   # page
-static/style.css       # styling
-static/app.js          # upload / drag-drop / rendering
-samples/sample-report.md   # bundled report for the .md preview test
+web/
+├── app.py                 # the Flask application
+├── templates/index.html   # page
+├── static/style.css       # styling
+├── static/app.js          # upload / drag-drop / rendering
+└── samples/sample-1-intelligence.md   # bundled report for the .md preview
 ```
 
 ## Run it
 
-From the repository root:
+From the repository root (`requirements.txt` already includes Flask and
+`markdown`):
 
 ```bash
-python -m pip install -e .                 # OneMail's own dependencies
-python -m pip install -r requirements-web.txt
-python app.py
+python -m pip install -e .
+python -m pip install -r requirements.txt
+python web/app.py
 ```
 
 Then open <http://127.0.0.1:5000>.
 
-`app.py` adds the repository root to `sys.path`, so it can be launched from
-anywhere, but keeping it at the root is simplest.
+`web/app.py` adds the repository root to `sys.path`, so it can be launched
+from anywhere.
 
 ## Two modes
 
@@ -341,7 +386,7 @@ model, no Docker). You get:
 - skipped detectors and their reasons,
 - the canonical `DetectionReport` JSON.
 
-If the repo's own corpus is present (`email/` or
+If the repo's own corpus is present (`email/phishing_pot/` or
 `dataset/phishing_pot/email/`), one-click chips scan bundled samples such as
 `sample-2.eml`.
 
