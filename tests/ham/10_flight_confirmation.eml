@@ -1,0 +1,17 @@
+From: Northwind Air <bookings@northwindair.com>
+To: traveller@personalmail.example
+Subject: Booking confirmed: OSL to AMS, 3 February
+Date: Wed, 22 Jan 2025 11:24:35 +0000
+Authentication-Results: mx.personalmail.example; spf=pass smtp.mailfrom=northwindair.com; dmarc=pass
+MIME-Version: 1.0
+Content-Type: text/plain; charset=utf-8
+
+Booking reference: NW4X7Z
+
+Flight NW231 departs Oslo 08:40, arrives Amsterdam 10:55 on 3 February.
+Baggage: one cabin bag included.
+
+Manage your booking:
+https://www.northwindair.com/manage/NW4X7Z
+
+Have a pleasant flight.

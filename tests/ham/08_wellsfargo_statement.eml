@@ -1,0 +1,14 @@
+From: Wells Fargo <alerts@wellsfargo.com>
+To: customer@personalmail.example
+Subject: Your January statement is ready
+Date: Mon, 20 Jan 2025 06:00:00 -0800
+Authentication-Results: mx.personalmail.example; spf=pass smtp.mailfrom=wellsfargo.com; dkim=pass; dmarc=pass
+MIME-Version: 1.0
+Content-Type: text/plain; charset=utf-8
+
+Your statement for the account ending in 4321 is now available.
+
+Sign on to view it:
+https://www.wellsfargo.com/statements
+
+Thank you for banking with us.

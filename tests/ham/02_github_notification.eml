@@ -1,0 +1,14 @@
+From: GitHub <notifications@github.com>
+To: dev@corp-example.com
+Subject: [acme/widgets] Pull request merged: Fix pagination (#482)
+Date: Mon, 13 Jan 2025 09:15:00 +0000
+Authentication-Results: mx.corp-example.com; spf=pass smtp.mailfrom=github.com; dkim=pass; dmarc=pass
+MIME-Version: 1.0
+Content-Type: text/plain; charset=utf-8
+
+Merged #482 into main.
+
+View it on GitHub:
+https://github.com/acme/widgets/pull/482
+
+You are receiving this because you are subscribed to this thread.

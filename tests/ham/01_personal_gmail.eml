@@ -1,0 +1,14 @@
+From: Alex Chen <alex.chen.friend@gmail.com>
+To: sam@personalmail.example
+Subject: Dinner on Friday?
+Date: Fri, 10 Jan 2025 18:02:11 +0100
+Authentication-Results: mx.personalmail.example; spf=pass smtp.mailfrom=gmail.com; dmarc=pass
+MIME-Version: 1.0
+Content-Type: text/plain; charset=utf-8
+
+Hey Sam,
+
+Shall we try the new ramen place near the station at seven? They also do
+vegetarian broth now. Let me know and I will book a table.
+
+Alex

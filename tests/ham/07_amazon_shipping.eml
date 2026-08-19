@@ -1,0 +1,15 @@
+From: "Amazon.com" <shipment-tracking@amazon.com>
+To: customer@personalmail.example
+Subject: Your package with running shoes has shipped
+Date: Sat, 18 Jan 2025 03:12:56 +0000
+Authentication-Results: mx.personalmail.example; spf=pass smtp.mailfrom=amazon.com; dkim=pass; dmarc=pass
+MIME-Version: 1.0
+Content-Type: text/plain; charset=utf-8
+
+Your package is on the way.
+
+Arriving: Monday, January 20
+Track your package:
+https://www.amazon.com/progress-tracker/package/ref=pe_123
+
+Order #112-4567890-1234567

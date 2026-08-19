@@ -78,6 +78,14 @@ class PhishingPotTests(unittest.TestCase):
         self.assertEqual(self.report.parse_failure_count, expected_parse_failures)
         self.assertEqual(self.report.processed_count, len(self.files))
 
+    def test_meets_the_minimum_recall_floor(self) -> None:
+        # Every corpus email is phishing, so flagged/processed is recall.
+        # Ratchet this floor upward as detection phases land; it exists to
+        # stop silent recall regressions. History: 0.48 baseline, 0.59 after
+        # lexicons, 0.73 after brand rules, 0.78 after structural rules.
+        recall = self.report.flagged_count / self.report.processed_count
+        self.assertGreaterEqual(recall, 0.75)
+
     def test_automatically_validates_all_corpus_findings(self) -> None:
         self.assertTrue(self.report.validation_passed)
         self.assertEqual(self.report.validation_issues, ())

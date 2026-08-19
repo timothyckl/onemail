@@ -1,0 +1,17 @@
+From: Priya Raman <priya.raman@corp-example.com>
+To: team-platform@corp-example.com
+Subject: Notes from Thursday's roadmap review
+Date: Fri, 17 Jan 2025 17:45:10 +0000
+Authentication-Results: mx.corp-example.com; spf=pass smtp.mailfrom=corp-example.com; dmarc=pass
+MIME-Version: 1.0
+Content-Type: text/plain; charset=utf-8
+
+Hi team,
+
+Notes from Thursday are on the wiki:
+https://wiki.corp-example.com/platform/roadmap-review-jan
+
+Highlights: the migration lands in March, hiring for two backend roles
+continues, and the observability workstream moves to Q2.
+
+Priya

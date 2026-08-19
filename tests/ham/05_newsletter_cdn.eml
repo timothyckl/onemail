@@ -1,0 +1,25 @@
+From: Trailhead Outfitters <news@trailheadoutfitters.com>
+To: subscriber@personalmail.example
+Subject: New season, new trails: our spring collection is here
+Date: Thu, 16 Jan 2025 15:00:00 -0500
+Authentication-Results: mx.personalmail.example; spf=pass smtp.mailfrom=trailheadoutfitters.com; dkim=pass; dmarc=pass
+MIME-Version: 1.0
+Content-Type: multipart/alternative; boundary="b1"
+
+--b1
+Content-Type: text/plain; charset=utf-8
+
+Spring collection preview: lightweight shells, trail runners, and packs.
+Browse the full lookbook on our site: https://www.trailheadoutfitters.com/spring
+
+To unsubscribe visit https://www.trailheadoutfitters.com/preferences
+--b1
+Content-Type: text/html; charset=utf-8
+
+<html><body>
+<p>Spring collection preview: lightweight shells, trail runners, and packs.</p>
+<img src="https://d1abcxyz.cloudfront.net/spring/hero.jpg" alt="Spring hero">
+<p><a href="https://www.trailheadoutfitters.com/spring">Browse the lookbook</a></p>
+<p><a href="https://www.trailheadoutfitters.com/preferences">Manage preferences</a></p>
+</body></html>
+--b1--
