@@ -38,6 +38,16 @@ function fmt(value) {
   return String(value);
 }
 
+function fmtDuration(milliseconds) {
+  const value = Math.max(0, Number(milliseconds) || 0);
+  if (value < 1000) return Math.round(value) + " ms";
+  const seconds = value / 1000;
+  if (seconds < 60) return seconds.toFixed(seconds < 10 ? 1 : 0) + " s";
+  const minutes = Math.floor(seconds / 60);
+  const remainder = Math.floor(seconds % 60);
+  return minutes + "m " + String(remainder).padStart(2, "0") + "s";
+}
+
 // --------------------------------------------------------------------------
 // Mode tabs
 // --------------------------------------------------------------------------
@@ -120,14 +130,28 @@ async function getJson(url) {
 // Raw variants for the agentic endpoint: they return the JSON body as-is,
 // because ok:false there carries a structured "unavailable/failed" result the
 // UI should render, not a thrown error.
+const investigationHeaders = { "X-OneMail-Request": "investigate" };
+
 async function postFileRaw(url, file) {
   const data = new FormData();
   data.append("file", file, file.name);
-  const response = await fetch(url, { method: "POST", body: data });
+  const response = await fetch(url, {
+    method: "POST",
+    headers: investigationHeaders,
+    body: data,
+  });
+  return response.json().catch(() => ({ ok: false, error: "Bad server response (" + response.status + ")." }));
+}
+async function postJsonRaw(url) {
+  const response = await fetch(url, { method: "POST", headers: investigationHeaders });
   return response.json().catch(() => ({ ok: false, error: "Bad server response (" + response.status + ")." }));
 }
 async function getJsonRaw(url) {
   const response = await fetch(url);
+  return response.json().catch(() => ({ ok: false, error: "Bad server response (" + response.status + ")." }));
+}
+async function getInvestigationRaw(url) {
+  const response = await fetch(url, { headers: investigationHeaders });
   return response.json().catch(() => ({ ok: false, error: "Bad server response (" + response.status + ")." }));
 }
 
@@ -264,13 +288,13 @@ function renderScan(data) {
   }
 }
 
-// ---- Agentic investigation (DeepSeek + Docker) ----
+// ---- Agentic investigation (LM Studio + Docker) ----
 function buildAgenticBlock() {
   const block = el("div", { class: "block agentic" }, [
     el("h3", { class: "block-head", text: "Agentic investigation" }),
   ]);
   const btn = el("button", { class: "btn-run", type: "button" },
-    ["Run agentic investigation", el("span", { class: "btn-run-sub", text: "DeepSeek + Docker sandbox" })]);
+    ["Run agentic investigation", el("span", { class: "btn-run-sub", text: "LM Studio + Docker sandbox" })]);
   const note = el("p", { class: "agentic-note" });
   if (agenticStatus && agenticStatus.ready === false) {
     const missing = [];
@@ -278,9 +302,12 @@ function buildAgenticBlock() {
     if (agenticStatus.docker && !agenticStatus.docker.ok) missing.push(agenticStatus.docker.detail);
     note.textContent = "Not ready in this environment — running it will report why. " + missing.join(" ");
   } else if (agenticStatus && agenticStatus.ready) {
-    note.textContent = "Environment looks ready. This runs a sandboxed static analysis and drafts an evidence-grounded report; it can take a minute.";
+    const vt = agenticStatus.virustotal && agenticStatus.virustotal.enabled
+      ? " Agent-selected VirusTotal hash lookups are enabled; files are never uploaded."
+      : "";
+    note.textContent = "Environment looks ready. This runs isolated inspection, rendering and emulation tasks before drafting an evidence-grounded report." + vt;
   } else {
-    note.textContent = "Runs a sandboxed static analysis and drafts an evidence-grounded report; it can take a minute.";
+    note.textContent = "Runs isolated inspection, rendering and emulation tasks before drafting an evidence-grounded report.";
   }
   const status = el("div", { class: "status", hidden: "" });
   status.id = "agentic-status";
@@ -294,17 +321,100 @@ function buildAgenticBlock() {
   return block;
 }
 
+function progressRow(event, totalElapsed) {
+  const running = event.status === "running";
+  const duration = event.duration_ms === null || event.duration_ms === undefined
+    ? (running ? Math.max(0, totalElapsed - event.total_elapsed_ms) : 0)
+    : event.duration_ms;
+  const meta = [event.tool, event.artifact].filter(Boolean).join(" · ");
+  return el("div", { class: "progress-row is-" + event.status }, [
+    el("span", { class: "progress-mark", text: running ? "●" : (event.status === "completed" ? "✓" : (event.status === "queued" ? "○" : "!")) }),
+    el("div", { class: "progress-copy" }, [
+      el("div", { class: "progress-action", text: event.action }),
+      meta ? el("div", { class: "progress-meta", text: meta }) : null,
+      event.detail ? el("div", { class: "progress-detail", text: event.detail }) : null,
+    ]),
+    el("span", { class: "progress-time", text: fmtDuration(duration) }),
+  ]);
+}
+
+function renderProgress(job, out) {
+  let panel = $(".investigation-progress", out);
+  if (!panel) {
+    panel = el("div", { class: "investigation-progress" });
+    out.appendChild(panel);
+  }
+  panel.innerHTML = "";
+  const latest = new Map();
+  for (const event of job.events || []) latest.set(event.step_id, event);
+  const steps = Array.from(latest.values());
+  const pipeline = steps.filter((event) => event.stage !== "container");
+  const container = steps.filter((event) => event.stage === "container");
+  const active = steps.filter((event) => event.status === "running").at(-1);
+
+  panel.appendChild(el("div", { class: "progress-head" }, [
+    el("div", {}, [
+      el("div", { class: "progress-label", text: job.status === "running" ? "Investigation in progress" : "Investigation " + job.status }),
+      el("div", { class: "progress-current", text: active ? active.action : "Preparing next step" }),
+    ]),
+    el("div", { class: "progress-total" }, [
+      el("span", { text: "Total" }),
+      el("strong", { text: fmtDuration(job.total_elapsed_ms) }),
+    ]),
+  ]));
+
+  const timeline = el("div", { class: "progress-list" });
+  pipeline.forEach((event) => timeline.appendChild(progressRow(event, job.total_elapsed_ms)));
+  panel.appendChild(timeline);
+
+  if (container.length) {
+    const body = el("div", { class: "details-body progress-list" });
+    container.forEach((event) => body.appendChild(progressRow(event, job.total_elapsed_ms)));
+    const details = el("details", { class: "container-progress" }, [
+      el("summary", { text: "Container activity (" + container.length + ")" }),
+      body,
+    ]);
+    if (container.some((event) => event.status === "running")) details.open = true;
+    panel.appendChild(details);
+  }
+  out.hidden = false;
+  return active;
+}
+
+function wait(milliseconds) {
+  return new Promise((resolve) => window.setTimeout(resolve, milliseconds));
+}
+
 async function runInvestigation(btn, status, out) {
   if (!currentScan) return;
   btn.disabled = true;
-  out.hidden = true;
+  out.hidden = false;
   out.innerHTML = "";
-  setStatus(status, "Running DeepSeek + Docker analysis — this can take a minute…", false, true);
+  setStatus(status, "Starting agentic investigation…", false, true);
   try {
-    const result = currentScan.kind === "file"
+    const started = currentScan.kind === "file"
       ? await postFileRaw("/api/investigate", currentScan.file)
-      : await getJsonRaw("/api/investigate/sample/" + encodeURIComponent(currentScan.name));
-    renderInvestigation(result, status, out);
+      : await postJsonRaw("/api/investigate/sample/" + encodeURIComponent(currentScan.name));
+    if (!started.ok || !started.job) {
+      renderInvestigation(started, status, out);
+      return;
+    }
+    let job = started.job;
+    while (job.status === "queued" || job.status === "running") {
+      const active = renderProgress(job, out);
+      setStatus(
+        status,
+        (active ? active.action : "Investigation queued") + " · total " + fmtDuration(job.total_elapsed_ms),
+        false,
+        true
+      );
+      await wait(500);
+      const update = await getInvestigationRaw("/api/investigate/" + encodeURIComponent(job.id));
+      if (!update.ok || !update.job) throw new Error(update.error || "Could not read investigation progress.");
+      job = update.job;
+    }
+    renderProgress(job, out);
+    renderInvestigation(job.result || { ok: false, flagged: true, error: "Investigation ended without a result." }, status, out, job);
   } catch (err) {
     setStatus(status, "Investigation request failed: " + err.message, true);
   } finally {
@@ -312,8 +422,7 @@ async function runInvestigation(btn, status, out) {
   }
 }
 
-function renderInvestigation(result, status, out) {
-  out.innerHTML = "";
+function renderInvestigation(result, status, out, job = null) {
   // Not flagged (shouldn't happen from this button) or explicit note.
   if (result.flagged === false) {
     setStatus(status, result.note || "Agentic investigation does not apply to this email.", false);
@@ -331,7 +440,13 @@ function renderInvestigation(result, status, out) {
     return;
   }
   // Success: render the intelligence report.
-  setStatus(status, "Investigation complete" + (result.model ? " · model " + result.model : ""), false);
+  setStatus(
+    status,
+    "Investigation complete" +
+      (result.model ? " · model " + result.model : "") +
+      (job ? " · total " + fmtDuration(job.total_elapsed_ms) : ""),
+    false
+  );
   out.appendChild(el("div", { class: "rendered", html: result.report_html }));
   out.appendChild(el("details", {}, [
     el("summary", { text: "Intelligence report JSON" }),

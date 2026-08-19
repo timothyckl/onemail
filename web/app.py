@@ -1,8 +1,8 @@
 """OneMail web console.
 
-A small Flask front end for the OneMail project. It runs the deterministic
-detection stage on uploaded ``.eml`` files and previews Markdown reports so the
-output format can be checked without a model or Docker.
+A small Flask front end for the OneMail project. It runs deterministic
+detection on uploaded ``.eml`` files, starts asynchronous LM Studio + Docker
+investigations for flagged messages, and previews Markdown reports.
 
 Drop this file at the OneMail repository root (next to ``detection/``,
 ``reporting/`` and ``dataset/``) and run::
@@ -10,15 +10,18 @@ Drop this file at the OneMail repository root (next to ``detection/``,
     python -m pip install -r requirements-web.txt
     python app.py
 
-Only the deterministic detection stage runs here. The agentic investigation
-stage is intentionally out of scope: it needs a configured LangChain model and
-a local Docker daemon, matching the boundary the project itself draws.
+The deterministic stage remains available without external services. Agentic
+investigation additionally requires a configured local LM Studio server and
+Docker daemon; readiness failures are reported without disabling detection.
 """
 
 from __future__ import annotations
 
 import re
 import sys
+import threading
+import time
+import uuid
 from dataclasses import asdict, is_dataclass
 from enum import Enum
 from html.parser import HTMLParser
@@ -61,6 +64,15 @@ except ModuleNotFoundError as error:  # pragma: no cover - startup guard
         "folder that contains 'detection/'), then run it again."
     ) from error
 from reporting import DetectionRecord, DetectionReport  # noqa: E402
+from agentic.progress import ProgressEvent, ProgressTracker  # noqa: E402
+from agentic.lmstudio import (  # noqa: E402
+    analysis_seconds_from_env,
+    config_from_env,
+    create_chat_model,
+    load_dotenv,
+    model_status,
+    role_config,
+)
 
 # Markdown rendering is optional. A minimal fallback keeps the preview working
 # even before the extra web dependency is installed.
@@ -118,6 +130,8 @@ SAMPLE_REPORT = _find_sample_report()
 
 EML_EXTENSIONS = {".eml"}
 MARKDOWN_EXTENSIONS = {".md", ".markdown", ".txt"}
+INVESTIGATION_REQUEST_HEADER = "X-OneMail-Request"
+INVESTIGATION_REQUEST_VALUE = "investigate"
 
 
 # --------------------------------------------------------------------------- #
@@ -224,7 +238,7 @@ def scan_bytes(name: str, content: bytes) -> Dict[str, Any]:
 _ALLOWED_TAGS = {
     "h1", "h2", "h3", "h4", "h5", "h6", "p", "ul", "ol", "li", "blockquote",
     "pre", "code", "strong", "em", "b", "i", "u", "del", "a", "hr", "br",
-    "table", "thead", "tbody", "tr", "th", "td", "span",
+    "table", "thead", "tbody", "tr", "th", "td", "span", "details", "summary",
 }
 _ALLOWED_ATTRS = {"a": {"href", "title"}, "th": {"align"}, "td": {"align"}}
 _SAFE_URL = re.compile(r"^(https?:|mailto:|#)", re.IGNORECASE)
@@ -383,11 +397,26 @@ def _bad_request(message: str, status: int = 400):
     return response
 
 
+def _require_investigation_request():
+    """Reject browser form submissions from other origins.
+
+    Browsers cannot attach this custom header cross-origin without a successful
+    CORS preflight, and this application does not allow cross-origin requests.
+    """
+
+    if (
+        request.headers.get(INVESTIGATION_REQUEST_HEADER)
+        != INVESTIGATION_REQUEST_VALUE
+    ):
+        return _bad_request("Investigation request header is missing or invalid.", 403)
+    return None
+
+
 # --------------------------------------------------------------------------- #
-# Agentic investigation (DeepSeek + Docker sandbox)
+# Agentic investigation (LM Studio + Docker sandbox)
 #
-# This stage is optional and heavy: it needs a DeepSeek API key, the Docker
-# daemon, and the built ``onemail-analysis:latest`` image. Everything here is
+# This stage is optional and heavy: it needs LM Studio's local server, the
+# Docker daemon, and the built ``onemail-analysis:latest`` image. Everything here is
 # imported lazily so the deterministic app keeps working when those aren't
 # present. When the stage isn't available we return a precise, actionable
 # message rather than crashing.
@@ -396,38 +425,126 @@ import importlib.util  # noqa: E402
 import os  # noqa: E402
 
 
-def _load_dotenv(path: Path) -> None:
-    """Load simple KEY=VALUE lines from a .env, without overriding real env vars."""
+# Pick up LM Studio connection settings from the repo .env if present.
+load_dotenv(REPO_ROOT / ".env")
 
-    if not path.is_file():
-        return
-    for line in path.read_text(encoding="utf-8", errors="ignore").splitlines():
-        line = line.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        key, _, value = line.partition("=")
-        key = key.strip()
-        value = value.strip().strip('"').strip("'")
-        if key and key not in os.environ:
-            os.environ[key] = value
-
-
-# Pick up DEEPSEEK_API_KEY / DEEPSEEK_MODEL from the repo .env if present.
-_load_dotenv(REPO_ROOT / ".env")
-
-DEEPSEEK_MODEL = os.environ.get("DEEPSEEK_MODEL", "deepseek-chat")
+LMSTUDIO = config_from_env()
 ANALYSIS_IMAGE = "onemail-analysis:latest"
+MAX_PROGRESS_EVENTS = 512
+JOB_RETENTION_SECONDS = 3600
+
+
+class _InvestigationJob:
+    """Thread-safe, memory-only state for one local investigation."""
+
+    def __init__(self, name: str) -> None:
+        self.id = uuid.uuid4().hex
+        self.name = name
+        self.status = "queued"
+        self.result: Optional[Dict[str, Any]] = None
+        self.created = time.monotonic()
+        self.finished: Optional[float] = None
+        self._events: List[Dict[str, object]] = []
+        self._lock = threading.Lock()
+        self.progress = ProgressTracker(self._record)
+        self.progress.event("pipeline", "Investigation queued", "queued")
+
+    def _record(self, event: ProgressEvent) -> None:
+        with self._lock:
+            if len(self._events) < MAX_PROGRESS_EVENTS:
+                self._events.append(event.to_dict())
+
+    def start(self) -> None:
+        with self._lock:
+            self.status = "running"
+
+    def complete(self, result: Dict[str, Any]) -> None:
+        with self._lock:
+            self.result = result
+            self.status = "completed" if result.get("ok") else "failed"
+            self.finished = time.monotonic()
+
+    def fail(self, error: BaseException) -> None:
+        with self._lock:
+            self.result = {
+                "ok": False,
+                "flagged": True,
+                "file": self.name,
+                "error": f"Agentic investigation failed: {type(error).__name__}: {error}",
+            }
+            self.status = "failed"
+            self.finished = time.monotonic()
+
+    def snapshot(self) -> Dict[str, Any]:
+        with self._lock:
+            return {
+                "id": self.id,
+                "file": self.name,
+                "status": self.status,
+                "total_elapsed_ms": self.progress.elapsed_ms,
+                "events": list(self._events),
+                "result": self.result,
+            }
+
+
+_JOBS: Dict[str, _InvestigationJob] = {}
+_JOBS_LOCK = threading.Lock()
+
+
+def _discard_expired_jobs() -> None:
+    now = time.monotonic()
+    with _JOBS_LOCK:
+        expired = [
+            identifier
+            for identifier, job in _JOBS.items()
+            if job.finished is not None and now - job.finished > JOB_RETENTION_SECONDS
+        ]
+        for identifier in expired:
+            del _JOBS[identifier]
+
+
+def _start_investigation(name: str, content: bytes) -> _InvestigationJob:
+    _discard_expired_jobs()
+    job = _InvestigationJob(name)
+    with _JOBS_LOCK:
+        _JOBS[job.id] = job
+
+    def run() -> None:
+        job.start()
+        step = job.progress.start("pipeline", "Run agentic investigation")
+        try:
+            result = investigate_bytes(name, content, progress=job.progress)
+        except BaseException as error:
+            job.progress.finish(
+                step,
+                "pipeline",
+                "Run agentic investigation",
+                status="failed",
+                detail=type(error).__name__,
+            )
+            job.fail(error)
+            return
+        job.progress.finish(
+            step,
+            "pipeline",
+            "Run agentic investigation",
+            status="completed" if result.get("ok") else "failed",
+            detail="Investigation complete" if result.get("ok") else "Investigation failed",
+        )
+        job.complete(result)
+
+    threading.Thread(target=run, daemon=True, name=f"onemail-{job.id[:8]}").start()
+    return job
+
+
+def _job(identifier: str) -> Optional[_InvestigationJob]:
+    _discard_expired_jobs()
+    with _JOBS_LOCK:
+        return _JOBS.get(identifier)
 
 
 def _model_status() -> Tuple[bool, str]:
-    if importlib.util.find_spec("langchain_deepseek") is None:
-        return False, "langchain-deepseek is not installed. Install the project: pip install -e ."
-    if not os.environ.get("DEEPSEEK_API_KEY"):
-        return (
-            False,
-            "DEEPSEEK_API_KEY is not set. Add it to your environment or the repo .env, then retry.",
-        )
-    return True, f"DeepSeek ready (model: {DEEPSEEK_MODEL})."
+    return model_status(LMSTUDIO)
 
 
 def _docker_status() -> Tuple[bool, str]:
@@ -467,22 +584,50 @@ def _docker_status() -> Tuple[bool, str]:
 
 
 def agentic_status() -> Dict[str, Any]:
-    """Report whether the agentic stage can run, and why not if it can't."""
+    """Report whether the agentic stage can run, and optional enrichments."""
+
+    from agentic.analysis import VirusTotalClient
 
     model_ok, model_detail = _model_status()
     docker_ok, docker_detail = _docker_status()
+    try:
+        virustotal_enabled = VirusTotalClient.from_env() is not None
+        virustotal_detail = (
+            "Hash-only lookups enabled; files are never uploaded."
+            if virustotal_enabled
+            else "Hash-only lookups disabled because VIRUSTOTAL_API_KEY is unset."
+        )
+    except ValueError as error:
+        virustotal_enabled = False
+        virustotal_detail = f"VirusTotal configuration is invalid: {error}"
     return {
         "ready": model_ok and docker_ok,
         "model": {"ok": model_ok, "detail": model_detail},
         "docker": {"ok": docker_ok, "detail": docker_detail},
+        "virustotal": {
+            "enabled": virustotal_enabled,
+            "detail": virustotal_detail,
+        },
     }
 
 
-def investigate_bytes(name: str, content: bytes) -> Dict[str, Any]:
-    """Run detection, then the DeepSeek + Docker agentic investigation if flagged."""
+def investigate_bytes(
+    name: str,
+    content: bytes,
+    progress: Optional[ProgressTracker] = None,
+) -> Dict[str, Any]:
+    """Run detection, then the LM Studio + Docker investigation if flagged."""
 
+    progress = progress or ProgressTracker()
+    detection_step = progress.start("detection", "Run deterministic detection")
     email = Email(file=name, content=content)
     detection = ENGINE.detect(email)
+    progress.finish(
+        detection_step,
+        "detection",
+        "Run deterministic detection",
+        detail=f"{len(detection.findings)} finding(s)",
+    )
 
     if not detection.flagged:
         return {
@@ -493,7 +638,14 @@ def investigate_bytes(name: str, content: bytes) -> Dict[str, Any]:
             "Only flagged emails form a Case.",
         }
 
+    readiness_step = progress.start("preflight", "Check model and Docker readiness")
     status = agentic_status()
+    progress.finish(
+        readiness_step,
+        "preflight",
+        "Check model and Docker readiness",
+        status="completed" if status["ready"] else "failed",
+    )
     if not status["ready"]:
         problems = [
             part["detail"] for part in (status["model"], status["docker"]) if not part["ok"]
@@ -508,9 +660,15 @@ def investigate_bytes(name: str, content: bytes) -> Dict[str, Any]:
         }
 
     try:
-        from langchain_deepseek import ChatDeepSeek
         from agentic import Case
-        from agentic.analysis import Analyzer, DockerSandbox, LangChainAgent
+        from agentic.analysis import (
+            Analyzer,
+            DockerSandbox,
+            LangChainAgent,
+            Limits,
+            SQLiteCorrelator,
+            VirusTotalClient,
+        )
         from agentic.intelligence import Renderer, Reporter
     except Exception as error:
         return {
@@ -521,23 +679,49 @@ def investigate_bytes(name: str, content: bytes) -> Dict[str, Any]:
         }
 
     try:
-        model = ChatDeepSeek(
-            model=DEEPSEEK_MODEL,
-            temperature=0,
-            timeout=60,
-            max_retries=2,
-            max_tokens=8192,
+        model_step = progress.start("model", "Initialise LM Studio clients")
+        planner_config = role_config(LMSTUDIO, "planner")
+        reporter_config = role_config(LMSTUDIO, "reporter")
+        planner_model = create_chat_model(planner_config)
+        reporter_model = create_chat_model(reporter_config)
+        progress.finish(
+            model_step,
+            "model",
+            "Initialise LM Studio clients",
+            detail=(
+                f"Planner reasoning: {planner_config.reasoning_effort}; "
+                f"reporter reasoning: {reporter_config.reasoning_effort}"
+            ),
         )
+        case_step = progress.start("pipeline", "Validate investigation case")
         case = Case(email=email, detection=detection)
+        progress.finish(case_step, "pipeline", "Validate investigation case")
         analysis = Analyzer(
-            sandbox=lambda item, limits: DockerSandbox(item, limits),
-            agent=LangChainAgent(model, structured_output_method="json_mode"),
+            sandbox=lambda item, limits: DockerSandbox(
+                item, limits, progress=progress
+            ),
+            agent=LangChainAgent(
+                planner_model,
+                timeout=planner_config.timeout,
+                structured_output_method="json_schema",
+                progress=progress,
+            ),
+            limits=Limits(seconds=analysis_seconds_from_env()),
+            progress=progress,
+            correlator=SQLiteCorrelator.from_env(),
+            virustotal=VirusTotalClient.from_env(),
         ).analyze(case)
         report = Reporter(
-            model, name=DEEPSEEK_MODEL, structured_output_method="json_mode"
+            reporter_model,
+            name=LMSTUDIO.model,
+            timeout=reporter_config.timeout,
+            structured_output_method="json_schema",
+            progress=progress,
         ).report(analysis)
+        render_step = progress.start("reporting", "Render intelligence report")
         markdown = Renderer().render(report)
         report_json = report.model_dump(mode="json")
+        progress.finish(render_step, "reporting", "Render intelligence report")
     except Exception as error:
         return {
             "ok": False,
@@ -550,7 +734,7 @@ def investigate_bytes(name: str, content: bytes) -> Dict[str, Any]:
         "ok": True,
         "flagged": True,
         "file": detection.file,
-        "model": DEEPSEEK_MODEL,
+        "model": LMSTUDIO.model,
         "report_markdown": markdown,
         "report_html": render_markdown_safe(markdown),
         "report_json": report_json,
@@ -607,6 +791,10 @@ def api_agentic_status():
 
 @app.post("/api/investigate")
 def api_investigate():
+    rejected = _require_investigation_request()
+    if rejected is not None:
+        return rejected
+
     upload = request.files.get("file")
     if upload is None or not upload.filename:
         return _bad_request("Choose an .eml file to investigate.")
@@ -615,20 +803,35 @@ def api_investigate():
     content = upload.read()
     if not content:
         return _bad_request("That file is empty.")
-    # Always 200: the JSON body carries ok/flagged/problems so the UI can render
-    # unavailability and failures without a generic error banner.
-    return jsonify(investigate_bytes(Path(upload.filename).name, content))
+    job = _start_investigation(Path(upload.filename).name, content)
+    return jsonify({"ok": True, "job": job.snapshot()}), 202
 
 
-@app.get("/api/investigate/sample/<name>")
+@app.post("/api/investigate/sample/<name>")
 def api_investigate_sample(name: str):
+    rejected = _require_investigation_request()
+    if rejected is not None:
+        return rejected
+
     if not SAMPLE_NAME.match(name):
         return _bad_request("Unknown sample name.", 404)
     for directory in SAMPLE_DIRS:
         candidate = (directory / name).resolve()
         if directory.resolve() in candidate.parents and candidate.is_file():
-            return jsonify(investigate_bytes(name, candidate.read_bytes()))
+            job = _start_investigation(name, candidate.read_bytes())
+            return jsonify({"ok": True, "job": job.snapshot()}), 202
     return _bad_request(f"Sample {name} is not present in this checkout.", 404)
+
+
+@app.get("/api/investigate/<identifier>")
+def api_investigation_status(identifier: str):
+    rejected = _require_investigation_request()
+    if rejected is not None:
+        return rejected
+    job = _job(identifier)
+    if job is None:
+        return _bad_request("Investigation job was not found or has expired.", 404)
+    return jsonify({"ok": True, "job": job.snapshot()})
 
 
 @app.post("/api/preview")
