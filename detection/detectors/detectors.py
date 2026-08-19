@@ -24,37 +24,23 @@ from ..data_models import (
 )
 
 from .base import Detector
+from .lexicon import ADVANCE_FEE_LANGUAGE, CREDENTIAL_LANGUAGE, URGENCY_LANGUAGE
 from .. import textnorm
 
-
-CREDENTIAL_LANGUAGE: Final[Tuple[str, ...]] = (
-    "verify your account",
-    "verify your details",
-    "sign in to continue",
-    "signin",
-    "log in",
-    "login",
-    "unlock your account",
-    "your password will expire",
-    "account is locked",
-    "account will be locked",
-    "validate your account",
-    "unusual activity",
-    "unusual sign-in",
-    "verify now",
-)
-
-URGENCY_LANGUAGE: Final[Tuple[str, ...]] = (
-    "wire transfer",
-    "gift card",
-    "gift cards",
-    "urgent",
-    "confidential",
-    "cannot call",
-    "in a meeting",
-    "before the bank closes",
-    "process a vendor payment",
-)
+__all__ = [
+    "ADVANCE_FEE_LANGUAGE",
+    "CREDENTIAL_LANGUAGE",
+    "URGENCY_LANGUAGE",
+    "AuthFailureDetector",
+    "ReplyToDivergenceDetector",
+    "CredentialUrlDetector",
+    "DisplayNameSpoofDetector",
+    "BecNoPayloadDetector",
+    "DEFAULT_DETECTORS",
+    "registered_domain",
+    "message_text",
+    "matching_phrases",
+]
 
 
 class AuthFailureDetector(Detector[AuthFailureFinding]):
