@@ -33,6 +33,7 @@ from detection.detectors.brand_detectors import BRAND_DETECTORS
 from detection.detectors.detectors import CREDENTIAL_LANGUAGE, URGENCY_LANGUAGE
 from detection.detectors.extra_detectors import EXTRA_DETECTORS
 from detection.detectors.qr_detectors import QR_DETECTORS
+from detection.detectors.freemail_detectors import FREEMAIL_DETECTORS
 from detection.detectors.structural_detectors import STRUCTURAL_DETECTORS
 
 
@@ -232,7 +233,11 @@ class _FindingValidator:
         self._extra_detectors = {
             detector.name: detector
             for detector in (
-                EXTRA_DETECTORS + QR_DETECTORS + BRAND_DETECTORS + STRUCTURAL_DETECTORS
+                EXTRA_DETECTORS
+                + QR_DETECTORS
+                + BRAND_DETECTORS
+                + STRUCTURAL_DETECTORS
+                + FREEMAIL_DETECTORS
             )
         }
 

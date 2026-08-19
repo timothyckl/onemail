@@ -31,6 +31,9 @@ class DetectorName(str, Enum):
     SHARED_HOSTING_URL = "shared_hosting_url"
     ADVANCE_FEE = "advance_fee"
     GIBBERISH_BODY = "gibberish_body"
+    # Freemail sender making brand or credential claims (auth-pass is not
+    # exculpatory: attackers pass SPF/DMARC on mailboxes they own).
+    FREEMAIL_SENDER = "freemail_sender"
 
 
 class DetectorStatus(str, Enum):

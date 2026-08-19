@@ -31,6 +31,7 @@ from .structural_detectors import (
     SharedHostingUrlDetector,
     SubjectObfuscationDetector,
 )
+from .freemail_detectors import FREEMAIL_DETECTORS, FreemailSenderDetector
 
 # The engine imports DEFAULT_DETECTORS from this package, so extending it here
 # is all that is needed to activate the additional rules.
@@ -40,12 +41,15 @@ DEFAULT_DETECTORS = (
     + QR_DETECTORS
     + BRAND_DETECTORS
     + STRUCTURAL_DETECTORS
+    + FREEMAIL_DETECTORS
 )
 
 __all__ = [
     "AdvanceFeeDetector",
     "AttachmentExtensionSpoofDetector",
     "AuthFailureDetector",
+    "FREEMAIL_DETECTORS",
+    "FreemailSenderDetector",
     "GibberishBodyDetector",
     "STRUCTURAL_DETECTORS",
     "SharedHostingUrlDetector",
