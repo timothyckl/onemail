@@ -7,6 +7,7 @@ from langchain_core.language_models import BaseChatModel
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints
 
 from agentic.analysis import Analysis
+from agentic.progress import ProgressTracker
 from agentic.structured import OutputMethod, StructuredOutput, json_instructions
 
 from .models import (
@@ -20,6 +21,7 @@ from .models import (
     Item,
     Mapping,
     Report,
+    Signal,
 )
 from .validator import Validator
 
@@ -73,27 +75,63 @@ class Reporter:
         validator: Optional[Validator] = None,
         timeout: int = 60,
         structured_output_method: Optional[OutputMethod] = None,
+        progress: Optional[ProgressTracker] = None,
     ) -> None:
         self._name = name
         self._validator = validator or Validator()
         self._drafter = StructuredOutput(model, _Draft, structured_output_method)
         self._timeout = timeout
         self._json_mode = structured_output_method == "json_mode"
+        self._progress = progress or ProgressTracker()
 
     def report(self, analysis: Analysis) -> Report:
         draft = self._draft(analysis)
         report = self._assemble(analysis, draft)
-        issues = self._validator.validate(report, analysis)
+        issues = self._validate(report, analysis, "Validate intelligence draft")
         if issues:
             draft = self._correct(analysis, draft, issues)
             report = self._assemble(analysis, draft)
-            issues = self._validator.validate(report, analysis)
+            issues = self._validate(report, analysis, "Validate corrected intelligence")
+        if issues:
+            # Optional enrichments from a local model are fail-closed: retain
+            # only elements that independently pass grounding validation. Core
+            # claim-reference failures still reject the report below.
+            step = self._progress.start(
+                "reporting", "Prune unsupported intelligence enrichments"
+            )
+            draft = self._prune_unsupported(analysis, draft)
+            report = self._assemble(analysis, draft)
+            self._progress.finish(
+                step, "reporting", "Prune unsupported intelligence enrichments"
+            )
+            issues = self._validate(report, analysis, "Validate pruned intelligence")
         if issues:
             raise ValueError("invalid intelligence report: " + "; ".join(issues))
         return report
 
+    def _validate(
+        self,
+        report: Report,
+        analysis: Analysis,
+        action: str,
+    ) -> Tuple[str, ...]:
+        step = self._progress.start("reporting", action, tool="Validator")
+        issues = self._validator.validate(report, analysis)
+        self._progress.finish(
+            step,
+            "reporting",
+            action,
+            tool="Validator",
+            status="completed" if not issues else "failed",
+            detail=("Grounding checks passed" if not issues else f"{len(issues)} issue(s)"),
+        )
+        return issues
+
     def _draft(self, analysis: Analysis) -> _Draft:
-        return self._invoke(self._messages(analysis))
+        return self._invoke(
+            self._messages(analysis),
+            "Draft evidence-grounded intelligence",
+        )
 
     def _correct(
         self,
@@ -114,10 +152,61 @@ class Reporter:
                 ),
             }
         )
-        return self._invoke(messages)
+        return self._invoke(messages, "Correct intelligence draft")
 
-    def _invoke(self, messages: list[dict[str, str]]) -> _Draft:
-        return self._drafter.invoke(messages, self._timeout, "intelligence draft")
+    def _invoke(self, messages: list[dict[str, str]], action: str) -> _Draft:
+        step = self._progress.start("reporting", action, tool="LM Studio")
+        try:
+            result = self._drafter.invoke(messages, self._timeout, "intelligence draft")
+        except Exception as error:
+            self._progress.finish(
+                step,
+                "reporting",
+                action,
+                status="failed",
+                tool="LM Studio",
+                detail=type(error).__name__,
+            )
+            raise
+        self._progress.finish(step, "reporting", action, tool="LM Studio")
+        return result
+
+    def _prune_unsupported(self, analysis: Analysis, draft: _Draft) -> _Draft:
+        """Remove optional model enrichments that cannot be grounded."""
+
+        def supported(candidate: _Draft) -> bool:
+            report = self._assemble(analysis, candidate)
+            return not self._validator.validate(report, analysis)
+
+        indicators = tuple(
+            item
+            for item in draft.indicators
+            if supported(_Draft(indicators=(item,)))
+        )
+        diamond_values = {}
+        for name in ("adversary", "infrastructure", "capability", "victim"):
+            diamond_values[name] = tuple(
+                item
+                for item in getattr(draft.diamond, name)
+                if supported(_Draft(diamond=Diamond(**{name: (item,)})))
+            )
+        attack = tuple(
+            item
+            for item in draft.attack.mappings
+            if supported(_Draft(attack=_Attack(mappings=(item,))))
+        )
+        chain = tuple(
+            item
+            for item in draft.chain.mappings
+            if supported(_Draft(chain=_Chain(mappings=(item,))))
+        )
+        return _Draft(
+            claims=draft.claims,
+            indicators=indicators,
+            diamond=Diamond(**diamond_values),
+            attack=_Attack(mappings=attack),
+            chain=_Chain(mappings=chain),
+        )
 
     def _messages(self, analysis: Analysis) -> list[dict[str, str]]:
         brief = {
@@ -169,7 +258,10 @@ class Reporter:
             "ATT&CK mapping, and Kill Chain mapping must cite evidence IDs. Leave "
             "unsupported framework elements empty. Names, rationales, claims, the "
             "summary, and gaps are assembled deterministically; do not draft them. "
-            "Do not make a maliciousness verdict or recommend an action."
+            "VirusTotal values are source-attributed provider metadata: do not treat "
+            "its permalink, domain, engine labels, or report metadata as threat "
+            "indicators or Diamond Model facets. Do not make a maliciousness verdict "
+            "or recommend an action."
         )
         if self._json_mode:
             system += json_instructions(
@@ -254,13 +346,23 @@ class Reporter:
             file=analysis.detection.file,
             model=self._name,
             summary=summary,
-            detection=tuple(finding.clause for finding in analysis.detection.findings),
+            detection=tuple(
+                Signal(
+                    detector=finding.detector.value,
+                    severity=finding.severity.value,
+                    heuristic=finding.heuristic,
+                    clause=finding.clause,
+                )
+                for finding in analysis.detection.findings
+            ),
             artifacts=tuple(
                 Item(
                     id=item.id,
                     name=item.name,
                     sha256=item.sha256,
                     detected=item.format.detected,
+                    parent=item.parent,
+                    similarity_hash=item.similarity_hash,
                 )
                 for item in analysis.artifacts
             ),

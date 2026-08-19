@@ -36,40 +36,39 @@ model). Remember to build the image first:
 
 ## What each file tests
 
-Baseline tasks (`extract`, `profile`, `identify`, `strings`, `yara`,
-`antivirus`) run automatically on **every** artifact, so each fixture exercises
+Baseline tasks (`extract`, `profile`, `identify`, `strings`, and `yara`) run
+automatically on **every** artifact, so each fixture exercises
 those too; the table lists the capability it is *designed* to demonstrate.
 
 | File | Capability | What the sandbox should show |
 | --- | --- | --- |
 | `01_extract_multi.eml` | extract / reconcile | Two artifacts (`payload.bin`, `notes.txt`) extracted; hashes reconciled against detection metadata. |
-| `02_profile_type_mismatch.eml` | profile | `statement.pdf` begins with `MZ`; profile flags a declared-vs-actual type mismatch and high entropy. |
+| `02_profile_type_mismatch.eml` | profile | `statement.pdf` begins with `MZ`; profile flags a declared-vs-actual type mismatch. |
 | `03_identify_disguised.eml` | identify | `logo.dat` is reported by `file` as `image/png`, not the `.dat` its name implies. |
 | `04_strings_iocs.eml` | strings | Readable C2 URL, drop email, and a base64-looking token surface in the strings output. |
 | `05_yara_powershell.eml` | yara | Matches `Suspicious_PowerShell_Encoded_Command` (`powershell` + `-EncodedCommand`). |
-| `06_antivirus_eicar.eml` | antivirus | Standard **EICAR** test file → ClamAV reports FOUND *if signatures are present*; otherwise an antivirus coverage gap. |
-| `07_archive_zip.eml` | archive | `7z l` lists `readme.txt` and a nested `data/` folder without extracting. |
+| `07_archive_zip.eml` | archive | Bounded extraction registers `readme.txt` and the nested `data/` files as child artifacts. |
 | `08_office_macro.eml` | office | A real OLE spreadsheet; `AutoOpen`/`Workbook_Open` tokens match `Suspicious_Office_AutoOpen`, and `olevba` runs. See note below. |
 | `09_pdf_openaction.eml` | pdf | Valid one-page PDF carrying `/OpenAction` + `/JavaScript`; pypdf reads the page. |
 | `10_pe_executable.eml` | pe | Minimal valid PE32; pefile reads `machine` (i386) and the `.text` section. |
 | `11_script_tokens.eml` | script | Contains `powershell`, `invoke-expression`, `FromBase64String`, `WScript.Shell`, `cmd.exe`. |
 | `12_embedded_polyglot.eml` | embedded | JPEG followed by a `PK\x03\x04` zip signature at a non-zero offset. |
 | `13_metadata_exif.eml` | metadata | ExifTool reads `Software`, `Make`, `UserComment`, and GPS fields. |
+| `14_html_render.eml` | render | The HTML body is extracted as an artifact, rendered offline, and converted to text/screenshot evidence. |
 
 ## Notes
 
-- **Everything here is inert.** EICAR is the industry-standard antivirus test
-  string; the PE is headers-only with no runnable code; the "macro" and "script"
-  files are tokens as text, never executed. The sandbox only inspects them
-  statically.
-- **EICAR needs signatures.** The `antivirus` task only reports a hit when a
-  ClamAV database is present in the image (`agentic/analysis/image/signatures/clamav/`).
-  Without it the task records a coverage gap — which is itself a valid thing to
-  observe.
+- **Everything here is inert.** The PE is headers-only with no runnable code;
+  the "macro" and "script" files are tokens as text, never executed natively.
+  Rendering is offline and the PE task uses an intercepted CPU/API emulator.
 - **`office` / olevba.** The fixture is a genuine OLE document so `identify` and
   `olevba` treat it as Office, and the macro tokens trip the baseline YARA rule.
   It contains no compiled VBA project, so `olevba` reports *no macros*. To also
   exercise olevba's VBA parser, drop in a real macro-bearing document in place of
   the attachment.
-- **Regenerate or tweak** with `make_agentic_samples.py` (kept alongside these
-  files); edit the fixture table there to add or change cases.
+- **Regenerate or tweak** by installing the fixture dependencies and running
+  the generator (kept alongside these files):
+  `python -m pip install -e ".[dev]"`, then
+  `python tests/agentic_test_data/make_agentic_samples.py OUTPUT_DIR`.
+  Generation is staged, so a dependency or build failure publishes no partial
+  fixture set. Edit the fixture table to add or change cases.

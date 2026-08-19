@@ -1,5 +1,6 @@
-"""Immutable models shared by static analysis components."""
+"""Immutable models shared by isolated investigation components."""
 
+import re
 from dataclasses import dataclass, field
 from typing import Mapping, Optional, Tuple
 
@@ -46,6 +47,8 @@ class Artifact:
     name: str
     size: int
     sha256: str
+    similarity_hash: Optional[str] = None
+    parent: Optional[str] = None
     format: Format = field(default_factory=Format)
     metrics: Metrics = field(default_factory=Metrics)
     preview: Preview = field(default_factory=Preview)
@@ -58,6 +61,10 @@ class Artifact:
             raise ValueError("artifact size cannot be negative")
         if len(self.sha256) != 64:
             raise ValueError("artifact requires a SHA-256 digest")
+        if self.similarity_hash is not None and not re.fullmatch(
+            r"[0-9a-f]{16}", self.similarity_hash
+        ):
+            raise ValueError("artifact similarity hash must be 64-bit hexadecimal")
 
 
 @dataclass(frozen=True)

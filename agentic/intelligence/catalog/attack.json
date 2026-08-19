@@ -43,7 +43,7 @@
     },
     "T1204.002": {
       "name": "Malicious File",
-      "predicates": ["attachment", "positive_antivirus_attachment"]
+      "predicates": ["attachment"]
     },
     "T1218": {
       "name": "System Binary Proxy Execution",
@@ -55,7 +55,7 @@
     },
     "T1566.001": {
       "name": "Spearphishing Attachment",
-      "predicates": ["attachment", "positive_antivirus_attachment"]
+      "predicates": ["attachment"]
     },
     "T1566.002": {
       "name": "Spearphishing Link",

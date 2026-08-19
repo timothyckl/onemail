@@ -4,16 +4,16 @@ Reply-To: billing@ms-account-verify.example
 Subject: Order details
 Authentication-Results: mx.corp.example; spf=fail; dkim=fail; dmarc=fail
 MIME-Version: 1.0
-Content-Type: multipart/mixed; boundary="===============4609848744184055447=="
+Content-Type: multipart/mixed; boundary="===============0031695264731638648=="
 
---===============4609848744184055447==
+--===============0031695264731638648==
 Content-Type: text/plain; charset="utf-8"
 Content-Transfer-Encoding: quoted-printable
 
 Our records show unusual sign-in activity. Please verify your account at http=
 s://secure-login.account-check.example/verify to avoid suspension.
 
---===============4609848744184055447==
+--===============0031695264731638648==
 Content-Type: text/javascript
 Content-Transfer-Encoding: base64
 Content-Disposition: attachment; filename="order.js"
@@ -26,4 +26,4 @@ ZXJzaGVsbCAtbm9wIC1jIGludm9rZS1leHByZXNzaW9uIjsgDQp2YXIgYjY0ICA9ICJbQ29udmVy
 dF06OkZyb21CYXNlNjRTdHJpbmcoJ1pXTm9idz09JykiOw0KdmFyIGNtZCAgPSAiY21kLmV4ZSAv
 YyBlY2hvIGJlbmlnbiI7DQo=
 
---===============4609848744184055447==--
+--===============0031695264731638648==--

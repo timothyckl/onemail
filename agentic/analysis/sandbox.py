@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 from agentic import Case
+from agentic.progress import ProgressTracker
 
 from .models import (
     Artifact,
@@ -30,7 +31,7 @@ from .models import (
 
 
 class Sandbox(ABC):
-    """Execute approved static-analysis tasks in an isolated environment."""
+    """Execute approved investigation tasks in an isolated environment."""
 
     @abstractmethod
     def __enter__(self) -> "Sandbox":
@@ -58,18 +59,20 @@ class DockerSandbox(Sandbox):
         limits: Limits,
         image: str = "onemail-analysis:latest",
         client: Optional[Any] = None,
+        progress: Optional[ProgressTracker] = None,
     ) -> None:
         self._owns_client = client is None
         if client is None:
             try:
                 import docker
             except ImportError as error:
-                raise RuntimeError("Docker SDK is required for static analysis") from error
+                raise RuntimeError("Docker SDK is required for isolated analysis") from error
             client = docker.from_env()
         self._case = case
         self._limits = limits
         self._image = image
         self._client = client
+        self._progress = progress or ProgressTracker()
         self._container: Optional[Any] = None
         self._email_path: Optional[Path] = None
         self._image_id: Optional[str] = None
@@ -79,7 +82,10 @@ class DockerSandbox(Sandbox):
         self._observation_ids: set[str] = set()
 
     def __enter__(self) -> "DockerSandbox":
-        memory = max(self._limits.total_bytes * 2, 256 * 1024 * 1024)
+        memory = max(self._limits.total_bytes * 4, 512 * 1024 * 1024)
+        step = self._progress.start(
+            "sandbox", "Create isolated analysis container", tool="Docker"
+        )
         try:
             handle = tempfile.NamedTemporaryFile(prefix="onemail-", suffix=".eml", delete=False)
             try:
@@ -110,7 +116,7 @@ class DockerSandbox(Sandbox):
                 tmpfs={
                     "/work": (
                         "rw,nosuid,nodev,noexec,mode=1777,size="
-                        f"{max(self._limits.total_bytes, 128 * 1024 * 1024)}"
+                        f"{max(self._limits.total_bytes * 2, 256 * 1024 * 1024)}"
                     )
                 },
                 volumes={
@@ -123,13 +129,39 @@ class DockerSandbox(Sandbox):
             )
         except Exception as error:
             cleanup_error = self._cleanup()
+            self._progress.finish(
+                step,
+                "sandbox",
+                "Create isolated analysis container",
+                status="failed",
+                tool="Docker",
+                detail=type(error).__name__,
+            )
             if cleanup_error is not None:
                 raise RuntimeError("failed to remove analysis container") from cleanup_error
             raise error
+        self._progress.finish(
+            step,
+            "sandbox",
+            "Create isolated analysis container",
+            tool="Docker",
+            detail=(self._image_id or self._image)[:120],
+        )
         return self
 
     def __exit__(self, exc_type: object, exc: object, traceback: object) -> None:
+        step = self._progress.start(
+            "sandbox", "Remove analysis container", tool="Docker"
+        )
         error = self._cleanup()
+        self._progress.finish(
+            step,
+            "sandbox",
+            "Remove analysis container",
+            status="failed" if error is not None else "completed",
+            tool="Docker",
+            detail=type(error).__name__ if error is not None else "",
+        )
         if error is not None:
             message = "failed to remove analysis container"
             if exc is not None:
@@ -209,19 +241,158 @@ class DockerSandbox(Sandbox):
     def _run(self, arguments: list[str]) -> Batch:
         if self._container is None:
             raise RuntimeError("sandbox is not running")
-        result = self._container.exec_run(
-            ["/opt/venv/bin/python", "/opt/onemail/runner.py"] + arguments,
-            demux=False,
+        command = ["/opt/venv/bin/python", "/opt/onemail/runner.py"] + arguments
+        created = self._client.api.exec_create(
+            self._container.id,
+            command,
+            stdout=True,
+            stderr=True,
         )
-        output = result.output.decode("utf-8", "replace")
-        if result.exit_code != 0:
-            raise RuntimeError(output[: self._limits.output_bytes])
-        data = json.loads(output)
-        if not isinstance(data, dict):
-            raise ValueError("sandbox output must be a JSON object")
+        execution_id = created["Id"] if isinstance(created, dict) else created
+        stream = self._client.api.exec_start(execution_id, stream=True, demux=False)
+        buffer = b""
+        messages: list[str] = []
+        data: Optional[Dict[str, Any]] = None
+        active: Dict[
+            str,
+            tuple[str, str, Optional[str], Optional[str], str],
+        ] = {}
+        byte_limit = max(self._limits.output_bytes * 128, 8 * 1024 * 1024)
+
+        try:
+            try:
+                for chunk in stream:
+                    buffer += (
+                        chunk
+                        if isinstance(chunk, bytes)
+                        else str(chunk).encode("utf-8", "replace")
+                    )
+                    if len(buffer) > byte_limit:
+                        raise ValueError("sandbox output exceeded its protocol limit")
+                    while b"\n" in buffer:
+                        raw, buffer = buffer.split(b"\n", 1)
+                        data = self._protocol_line(raw, data, active, messages)
+                if buffer.strip():
+                    data = self._protocol_line(buffer, data, active, messages)
+            except Exception as error:
+                for stage, action, artifact, tool, step_id in active.values():
+                    self._progress.finish(
+                        step_id,
+                        stage,
+                        action,
+                        status="failed",
+                        artifact=artifact,
+                        tool=tool,
+                        detail=type(error).__name__,
+                    )
+                active.clear()
+                raise
+        finally:
+            response = getattr(stream, "_response", None)
+            if response is not None:
+                response.close()
+
+        inspected = self._client.api.exec_inspect(execution_id)
+        exit_code = inspected.get("ExitCode") if isinstance(inspected, dict) else None
+        if exit_code != 0:
+            for stage, action, artifact, tool, step_id in active.values():
+                self._progress.finish(
+                    step_id,
+                    stage,
+                    action,
+                    status="failed",
+                    artifact=artifact,
+                    tool=tool,
+                    detail="Container runner stopped unexpectedly",
+                )
+            detail = "\n".join(messages)[: self._limits.output_bytes]
+            raise RuntimeError(detail or f"sandbox runner exited with code {exit_code}")
+        if data is None:
+            raise ValueError("sandbox returned no result")
+        for stage, action, artifact, tool, step_id in active.values():
+            self._progress.finish(
+                step_id,
+                stage,
+                action,
+                status="failed",
+                artifact=artifact,
+                tool=tool,
+                detail="Container runner omitted completion event",
+            )
         batch = replace(_batch(data), image=self._image_id)
         self._validate(batch)
         return batch
+
+    def _protocol_line(
+        self,
+        raw: bytes,
+        current: Optional[Dict[str, Any]],
+        active: Dict[
+            str,
+            tuple[str, str, Optional[str], Optional[str], str],
+        ],
+        messages: list[str],
+    ) -> Optional[Dict[str, Any]]:
+        text = raw.decode("utf-8", "replace").strip()
+        if not text:
+            return current
+        try:
+            payload = json.loads(text)
+        except ValueError:
+            messages.append(text[:1000])
+            return current
+        if not isinstance(payload, dict):
+            raise ValueError("sandbox protocol message must be a JSON object")
+        message_type = payload.get("type")
+        if message_type == "event":
+            runner_id = str(payload.get("id", ""))[:120]
+            action = str(payload.get("action", "Container activity"))[:120]
+            artifact = _optional_text(payload.get("artifact"), 200)
+            tool = _optional_text(payload.get("tool"), 80)
+            status = payload.get("status")
+            if status == "running":
+                step_id = self._progress.start(
+                    "container", action, artifact=artifact, tool=tool
+                )
+                active[runner_id] = ("container", action, artifact, tool, step_id)
+            elif status in {"completed", "failed", "skipped"}:
+                item = active.pop(runner_id, None)
+                duration = payload.get("duration_ms")
+                duration_ms = duration if isinstance(duration, int) and duration >= 0 else None
+                if item is not None:
+                    stage, prior_action, prior_artifact, prior_tool, step_id = item
+                    self._progress.finish(
+                        step_id,
+                        stage,
+                        prior_action,
+                        status=status,
+                        artifact=prior_artifact,
+                        tool=prior_tool,
+                        duration_ms=duration_ms,
+                        detail=str(payload.get("detail", ""))[:500],
+                    )
+                else:
+                    self._progress.event(
+                        "container",
+                        action,
+                        status,
+                        artifact=artifact,
+                        tool=tool,
+                        duration_ms=duration_ms,
+                        detail=str(payload.get("detail", ""))[:500],
+                    )
+            else:
+                raise ValueError("sandbox returned an invalid progress status")
+            return current
+        if message_type == "result":
+            result = payload.get("batch")
+            if not isinstance(result, dict):
+                raise ValueError("sandbox result must contain a batch object")
+            return result
+        if message_type is None:
+            # Backwards compatibility with an image built before progress events.
+            return payload
+        raise ValueError("sandbox returned an unknown protocol message")
 
     def _validate(self, batch: Batch) -> None:
         artifact_ids = _unique("artifact", [item.id for item in batch.artifacts])
@@ -243,6 +414,8 @@ class DockerSandbox(Sandbox):
         for artifact in batch.artifacts:
             if re.fullmatch(r"[0-9a-f]{64}", artifact.sha256) is None:
                 raise ValueError("sandbox returned an invalid artifact digest")
+            if artifact.parent is not None and artifact.parent not in known_artifacts:
+                raise ValueError("sandbox artifact references an unknown parent")
         for item in batch.evidence:
             if item.origin != "analysis":
                 raise ValueError("sandbox evidence must have analysis origin")
@@ -280,11 +453,17 @@ def _artifact(data: Dict[str, Any]) -> Artifact:
         name=data["name"],
         size=data["size"],
         sha256=data["sha256"],
+        similarity_hash=data.get("similarity_hash"),
+        parent=data.get("parent"),
         format=Format(**data.get("format", {})),
         metrics=Metrics(**data.get("metrics", {})),
         preview=Preview(**data.get("preview", {})),
         matches=tuple(Match(**item) for item in data.get("matches", [])),
     )
+
+
+def _optional_text(value: object, limit: int) -> Optional[str]:
+    return None if value is None else str(value).replace("\x00", "")[:limit]
 
 
 def _unique(kind: str, values: list[str]) -> set[str]:

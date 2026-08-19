@@ -4,16 +4,16 @@ Reply-To: billing@ms-account-verify.example
 Subject: Protected invoice
 Authentication-Results: mx.corp.example; spf=fail; dkim=fail; dmarc=fail
 MIME-Version: 1.0
-Content-Type: multipart/mixed; boundary="===============7395548996720024024=="
+Content-Type: multipart/mixed; boundary="===============6566592650490294470=="
 
---===============7395548996720024024==
+--===============6566592650490294470==
 Content-Type: text/plain; charset="utf-8"
 Content-Transfer-Encoding: quoted-printable
 
 Our records show unusual sign-in activity. Please verify your account at http=
 s://secure-login.account-check.example/verify to avoid suspension.
 
---===============7395548996720024024==
+--===============6566592650490294470==
 Content-Type: application/vnd.ms-excel
 Content-Transfer-Encoding: base64
 Content-Disposition: attachment; filename="invoice.xls"
@@ -119,4 +119,4 @@ AAAAAAAAAAAAAAAAAAAAAAAAAAD+////AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
 AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAf///////////////wAA
 AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAP7///8AAAAAAAAAAA==
 
---===============7395548996720024024==--
+--===============6566592650490294470==--

@@ -1,9 +1,0 @@
-{
-  "clamav": {
-    "database": "not-bundled",
-    "instructions": "Place a recorded ClamAV database snapshot in signatures/clamav before building."
-  },
-  "yara": {
-    "rules": "rules/base.yar"
-  }
-}

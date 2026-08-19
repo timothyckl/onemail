@@ -1,6 +1,7 @@
-"""Deterministically render a validated intelligence report as Markdown."""
+"""Deterministically render a validated intelligence report as readable Markdown."""
 
 import html
+import json
 
 from .models import Report
 
@@ -8,104 +9,239 @@ from .models import Report
 class Renderer:
     def render(self, report: Report) -> str:
         lines = [
-            f"# Intelligence Report: {_safe(report.file)}",
+            "# OneMail Investigation Report",
             "",
-            "## Summary",
+            "> **Scope:** Evidence-grounded isolated investigation. This report does not "
+            "assign a malicious/benign verdict or prescribe an action.",
+            "",
+            "| Report detail | Value |",
+            "| --- | --- |",
+            f"| Email | {_code(report.file)} |",
+            f"| Model | {_code(report.model)} |",
+            "| Analysis | Deterministic detection + sandboxed inspection, rendering, and emulation |",
+            "",
+            "## Investigation Overview",
             "",
             _safe(report.summary),
             "",
-            "## Detection Context",
+            "### At a glance",
+            "",
+            "| Category | Count |",
+            "| --- | ---: |",
+            f"| Detection signals | {len(report.detection)} |",
+            f"| Analysed files | {len(report.artifacts)} |",
+            f"| Grounded observations | {len(report.claims)} |",
+            f"| Indicators | {len(report.indicators)} |",
+            f"| Evidence records | {len(report.citations)} |",
+            f"| Gaps and limitations | {len(report.gaps)} |",
+            "",
+            "## Key Findings",
+            "",
+            "### Detection signals",
             "",
         ]
         lines.extend(
-            _items(
-                tuple(_safe(item) for item in report.detection),
-                "No deterministic findings recorded.",
+            _table(
+                ("Severity", "Detector", "Basis", "Finding"),
+                tuple(
+                    (
+                        item.severity.upper(),
+                        _code(item.detector),
+                        "Heuristic" if item.heuristic else "Deterministic",
+                        _safe(item.clause),
+                    )
+                    for item in report.detection
+                ),
+                "No deterministic detection signals were recorded.",
             )
         )
-        lines.extend(["", "## Artifacts", ""])
+
+        lines.extend(["", "### Grounded analysis observations", ""])
         lines.extend(
-            f"- {_code(item.name)} ({_code(item.sha256)}): {_safe(item.detected)}"
-            for item in report.artifacts
+            _table(
+                ("#", "Confidence", "Observation", "Evidence"),
+                tuple(
+                    (
+                        str(index),
+                        item.confidence.value.title(),
+                        _safe(item.text),
+                        _references(item.evidence),
+                    )
+                    for index, item in enumerate(report.claims, start=1)
+                ),
+                "No additional grounded observations were selected.",
+            )
         )
-        lines.extend(["", "## Claims", ""])
+
+        lines.extend(["", "## Analysed Files", ""])
         lines.extend(
-            f"- {_safe(item.text)} ({item.confidence.value}; evidence: "
-            f"{', '.join(_safe(value) for value in item.evidence)})"
-            for item in report.claims
+            _table(
+                ("ID", "File", "Parent", "Detected type", "Similarity", "SHA-256"),
+                tuple(
+                    (
+                        _code(item.id),
+                        _code(item.name),
+                        _code(item.parent) if item.parent else "—",
+                        _safe(item.detected),
+                        _code(item.similarity_hash) if item.similarity_hash else "—",
+                        _code(item.sha256),
+                    )
+                    for item in report.artifacts
+                ),
+                "No files were returned by the analysis sandbox.",
+            )
         )
+
         lines.extend(["", "## Indicators", ""])
         lines.extend(
-            f"- {_safe(item.type)}: {_code(item.value)} (evidence: "
-            f"{', '.join(_safe(value) for value in item.evidence)})"
-            for item in report.indicators
-        )
-        lines.extend(["", "## Diamond Model", ""])
-        for name in ("adversary", "infrastructure", "capability", "victim"):
-            lines.append(f"### {name.title()}")
-            lines.append("")
-            lines.extend(
-                _items(
-                    tuple(
-                        f"{_safe(item.value)} ({item.confidence.value}; evidence: "
-                        f"{', '.join(_safe(value) for value in item.evidence)})"
-                        for item in getattr(report.diamond, name)
-                    ),
-                    "Unknown from available evidence.",
-                )
-            )
-            lines.append("")
-        lines.extend(["## MITRE ATT&CK", ""])
-        lines.extend(
-            _items(
+            _table(
+                ("Type", "Value", "Evidence"),
                 tuple(
-                    f"{_safe(item.id)} {_safe(item.name)}: {_safe(item.rationale)} "
-                    f"({item.confidence.value}; evidence: "
-                    f"{', '.join(_safe(value) for value in item.evidence)})"
+                    (
+                        _safe(item.type.title()),
+                        _code(item.value),
+                        _references(item.evidence),
+                    )
+                    for item in report.indicators
+                ),
+                "No independently grounded indicators were retained.",
+            )
+        )
+
+        lines.extend(["", "## Technical Assessment", "", "### Diamond Model", ""])
+        diamond_rows = []
+        for category in ("adversary", "infrastructure", "capability", "victim"):
+            facets = getattr(report.diamond, category)
+            if facets:
+                diamond_rows.extend(
+                    (
+                        category.title(),
+                        _safe(item.value),
+                        item.confidence.value.title(),
+                        _references(item.evidence),
+                    )
+                    for item in facets
+                )
+            else:
+                diamond_rows.append(
+                    (category.title(), "Unknown from available evidence", "—", "—")
+                )
+        lines.extend(
+            _table(
+                ("Facet", "Assessment", "Confidence", "Evidence"),
+                tuple(diamond_rows),
+                "No Diamond Model facets were supported.",
+            )
+        )
+
+        lines.extend(["", "### MITRE ATT&CK", ""])
+        lines.extend(
+            _table(
+                ("Technique", "Confidence", "Evidence-based rationale", "Evidence"),
+                tuple(
+                    (
+                        f"{_code(item.id)} {_safe(item.name)}",
+                        item.confidence.value.title(),
+                        _safe(item.rationale),
+                        _references(item.evidence),
+                    )
                     for item in report.attack.mappings
                 ),
-                "No supported mappings.",
+                "No ATT&CK mappings were supported by the available evidence.",
             )
         )
-        lines.extend(["", "## Cyber Kill Chain", ""])
+
+        lines.extend(["", "### Cyber Kill Chain", ""])
         lines.extend(
-            _items(
+            _table(
+                ("Phase", "Confidence", "Evidence-based rationale", "Evidence"),
                 tuple(
-                    f"{_safe(item.id)}: {_safe(item.rationale)} "
-                    f"({item.confidence.value}; evidence: "
-                    f"{', '.join(_safe(value) for value in item.evidence)})"
+                    (
+                        _safe(item.id),
+                        item.confidence.value.title(),
+                        _safe(item.rationale),
+                        _references(item.evidence),
+                    )
                     for item in report.chain.mappings
                 ),
-                "No supported mappings.",
+                "No Cyber Kill Chain mappings were supported by the available evidence.",
             )
         )
-        lines.extend(["", "## Gaps", ""])
+
+        lines.extend(["", "## Limitations and Gaps", ""])
         lines.extend(
-            _items(
-                tuple(_safe(item) for item in report.gaps),
-                "No additional gaps recorded.",
+            [f"- {_safe(item)}" for item in report.gaps]
+            if report.gaps
+            else ["- No additional gaps were recorded."]
+        )
+
+        lines.extend(["", "## Technical Evidence Appendix", ""])
+        if report.citations:
+            lines.extend(
+                [
+                    "<details>",
+                    f"<summary>Show {len(report.citations)} evidence records</summary>",
+                    "",
+                ]
             )
-        )
-        lines.extend(["", "## Evidence", ""])
-        lines.extend(
-            f"- {_code(item.id)} [{_safe(item.origin)}/{_safe(item.kind)}]: "
-            f"{_safe(item.value)}"
-            for item in report.citations
-        )
+            for citation in report.citations:
+                lines.extend(
+                    [
+                        f"<h4><code>{_html(citation.id)}</code> — "
+                        f"{_html(citation.kind)}</h4>",
+                        f"<p><strong>Source:</strong> {_html(citation.origin)}</p>",
+                        f"<pre><code>{_html(_pretty(citation.value))}</code></pre>",
+                    ]
+                )
+            lines.extend(["", "</details>"])
+        else:
+            lines.append("No technical evidence records were retained.")
+
         return "\n".join(lines).rstrip() + "\n"
 
 
-def _items(values: tuple[str, ...], empty: str) -> list[str]:
-    return [f"- {item}" for item in values] if values else [f"- {empty}"]
+def _table(
+    headers: tuple[str, ...],
+    rows: tuple[tuple[str, ...], ...],
+    empty: str,
+) -> list[str]:
+    if not rows:
+        return [empty]
+    lines = [
+        "| " + " | ".join(headers) + " |",
+        "| " + " | ".join("---" for _ in headers) + " |",
+    ]
+    lines.extend(
+        "| " + " | ".join(_cell(value) for value in row) + " |" for row in rows
+    )
+    return lines
+
+
+def _references(values: tuple[str, ...]) -> str:
+    return ", ".join(_code(value) for value in values) if values else "—"
+
+
+def _cell(value: str) -> str:
+    return value.replace("|", "\\|").replace("\n", " ").replace("\r", " ")
 
 
 def _safe(value: str) -> str:
-    escaped = html.escape(value, quote=False).replace("\n", " ").replace("\r", " ")
+    escaped = _html(value).replace("\n", " ").replace("\r", " ")
     for character in ("\\", "`", "*", "_", "[", "]", "(", ")", "#"):
         escaped = escaped.replace(character, "\\" + character)
     return escaped
 
 
 def _code(value: str) -> str:
-    escaped = html.escape(value, quote=False).replace("\n", " ").replace("\r", " ")
-    return f"<code>{escaped}</code>"
+    return f"<code>{_html(value).replace(chr(10), ' ').replace(chr(13), ' ')}</code>"
+
+
+def _html(value: str) -> str:
+    return html.escape(value, quote=False)
+
+
+def _pretty(value: str) -> str:
+    try:
+        return json.dumps(json.loads(value), indent=2, sort_keys=True, ensure_ascii=False)
+    except (TypeError, ValueError):
+        return value

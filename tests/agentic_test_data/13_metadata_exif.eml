@@ -4,16 +4,16 @@ Reply-To: billing@ms-account-verify.example
 Subject: Team picture
 Authentication-Results: mx.corp.example; spf=fail; dkim=fail; dmarc=fail
 MIME-Version: 1.0
-Content-Type: multipart/mixed; boundary="===============0849673251665925767=="
+Content-Type: multipart/mixed; boundary="===============8028860267747002036=="
 
---===============0849673251665925767==
+--===============8028860267747002036==
 Content-Type: text/plain; charset="utf-8"
 Content-Transfer-Encoding: quoted-printable
 
 Our records show unusual sign-in activity. Please verify your account at http=
 s://secure-login.account-check.example/verify to avoid suspension.
 
---===============0849673251665925767==
+--===============8028860267747002036==
 Content-Type: image/jpeg
 Content-Transfer-Encoding: base64
 Content-Disposition: attachment; filename="team.jpg"
@@ -36,4 +36,4 @@ GiYnKCkqNTY3ODk6Q0RFRkdISUpTVFVWV1hZWmNkZWZnaGlqc3R1dnd4eXqCg4SFhoeIiYqSk5SV
 lpeYmZqio6Slpqeoqaqys7S1tre4ubrCw8TFxsfIycrS09TV1tfY2dri4+Tl5ufo6ery8/T19vf4
 +fr/2gAMAwEAAhEDEQA/AOqooooAKKKKACiiigAooooA/9k=
 
---===============0849673251665925767==--
+--===============8028860267747002036==--

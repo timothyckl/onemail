@@ -1,7 +1,7 @@
 """Canonical intelligence report models."""
 
 from enum import Enum
-from typing import Annotated, Tuple
+from typing import Annotated, Optional, Tuple
 
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints
 
@@ -83,13 +83,22 @@ class Item(Model):
     name: str
     sha256: str
     detected: str
+    parent: Optional[str] = None
+    similarity_hash: Optional[str] = None
+
+
+class Signal(Model):
+    detector: str
+    severity: str
+    heuristic: bool
+    clause: str
 
 
 class Report(Model):
     file: str
     model: str
     summary: str = Field(max_length=4000)
-    detection: Tuple[str, ...]
+    detection: Tuple[Signal, ...]
     artifacts: Tuple[Item, ...]
     claims: Tuple[Claim, ...]
     indicators: Tuple[Indicator, ...]

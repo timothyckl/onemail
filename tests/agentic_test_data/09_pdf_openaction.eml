@@ -4,16 +4,16 @@ Reply-To: billing@ms-account-verify.example
 Subject: Please review the PDF
 Authentication-Results: mx.corp.example; spf=fail; dkim=fail; dmarc=fail
 MIME-Version: 1.0
-Content-Type: multipart/mixed; boundary="===============3138919933212815325=="
+Content-Type: multipart/mixed; boundary="===============1429229456708890986=="
 
---===============3138919933212815325==
+--===============1429229456708890986==
 Content-Type: text/plain; charset="utf-8"
 Content-Transfer-Encoding: quoted-printable
 
 Our records show unusual sign-in activity. Please verify your account at http=
 s://secure-login.account-check.example/verify to avoid suspension.
 
---===============3138919933212815325==
+--===============1429229456708890986==
 Content-Type: application/pdf
 Content-Transfer-Encoding: base64
 Content-Disposition: attachment; filename="invoice.pdf"
@@ -31,4 +31,4 @@ NTUzNSBmIAowMDAwMDAwMDA5IDAwMDAwIG4gCjAwMDAwMDAwNzYgMDAwMDAgbiAKMDAwMDAwMDEz
 MyAwMDAwMCBuIAowMDAwMDAwMjIwIDAwMDAwIG4gCjAwMDAwMDAzMDggMDAwMDAgbiAKdHJhaWxl
 cgo8PCAvU2l6ZSA2IC9Sb290IDEgMCBSID4+CnN0YXJ0eHJlZgo0MzUKJSVFT0Y=
 
---===============3138919933212815325==--
+--===============1429229456708890986==--

@@ -41,7 +41,16 @@ class Validator:
 
         for name in ("adversary", "infrastructure", "capability", "victim"):
             for facet in getattr(report.diamond, name):
-                if not self._supported(facet.value, facet.evidence, evidence):
+                non_provider_evidence = {
+                    identifier: item
+                    for identifier, item in evidence.items()
+                    if item.kind != "virustotal"
+                }
+                if not self._supported(
+                    facet.value,
+                    facet.evidence,
+                    non_provider_evidence,
+                ):
                     issues.append(
                         f"Diamond {name} value is absent from cited evidence: {facet.value}"
                     )
@@ -72,7 +81,6 @@ class Validator:
             Phase.WEAPONIZATION.value: {
                 "yara_powershell",
                 "yara_office_autoopen",
-                "positive_antivirus_attachment",
                 "dangerous_attachment",
                 "obfuscated_attachment",
             },
@@ -161,7 +169,14 @@ class Validator:
                 return False
         elif normalized_kind != "filename":
             return False
-        return cls._supported(normalized_value, references, evidence)
+        eligible_evidence = evidence
+        if normalized_kind in {"ipv4", "domain", "url", "email"}:
+            eligible_evidence = {
+                identifier: item
+                for identifier, item in evidence.items()
+                if item.kind != "virustotal"
+            }
+        return cls._supported(normalized_value, references, eligible_evidence)
 
     @staticmethod
     def _predicate(predicate: str, evidence: Evidence) -> bool:
@@ -182,13 +197,6 @@ class Validator:
             }
         if predicate == "dangerous_attachment":
             return evidence.kind == "dangerous_attachment"
-        if predicate == "positive_antivirus_attachment":
-            return (
-                evidence.kind == "antivirus"
-                and evidence.artifact not in {None, "email"}
-                and isinstance(value, dict)
-                and "FOUND" in str(value.get("result", ""))
-            )
         if predicate == "embedded_attachment":
             return (
                 evidence.kind == "embedded"

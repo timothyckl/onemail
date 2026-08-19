@@ -1,4 +1,4 @@
-"""Orchestrate deterministic and adaptive static analysis for one case."""
+"""Orchestrate deterministic and adaptive isolated analysis for one case."""
 
 import hashlib
 import time
@@ -9,13 +9,16 @@ from typing import Callable, Dict, Set, Tuple
 from detection.data_models import FiredResult
 
 from agentic import Case
+from agentic.progress import ProgressTracker
 
 from .agent import Agent
+from .correlation import SQLiteCorrelator
 from .models import (
     Analysis,
     Artifact,
     Batch,
     Evidence,
+    Failure,
     Gap,
     Limits,
     Observation,
@@ -24,6 +27,7 @@ from .models import (
 from .policy import Policy
 from .sandbox import Sandbox
 from .tools import TOOLS
+from .virustotal import VirusTotalClient
 
 
 class Analyzer:
@@ -35,11 +39,17 @@ class Analyzer:
         agent: Agent,
         policy: Policy = Policy(),
         limits: Limits = Limits(),
+        progress: ProgressTracker | None = None,
+        correlator: SQLiteCorrelator | None = None,
+        virustotal: VirusTotalClient | None = None,
     ) -> None:
         self._sandbox = sandbox
         self._agent = agent
         self._policy = policy
         self._limits = limits
+        self._progress = progress or ProgressTracker()
+        self._correlator = correlator
+        self._virustotal = virustotal
 
     def analyze(self, case: Case) -> Analysis:
         if len(case.email.content) > self._limits.email_bytes:
@@ -59,12 +69,42 @@ class Analyzer:
         deadline = time.monotonic() + self._limits.seconds
 
         with self._sandbox(case, self._limits) as sandbox:
-            analysis = self._merge(analysis, sandbox.baseline())
+            step = self._progress.start("analysis", "Run deterministic baseline")
+            try:
+                analysis = self._merge(analysis, sandbox.baseline())
+            except Exception as error:
+                self._progress.finish(
+                    step,
+                    "analysis",
+                    "Run deterministic baseline",
+                    status="failed",
+                    detail=type(error).__name__,
+                )
+                raise
+            self._progress.finish(
+                step,
+                "analysis",
+                "Run deterministic baseline",
+                detail=f"Discovered {len(analysis.artifacts)} artifact(s)",
+            )
+            reconcile_step = self._progress.start(
+                "analysis", "Reconcile extracted artifacts"
+            )
             analysis = self._reconcile(case, analysis)
+            self._progress.finish(
+                reconcile_step,
+                "analysis",
+                "Reconcile extracted artifacts",
+            )
             completed: Set[Tuple[str, str]] = {
                 (trace.task, trace.artifact) for trace in analysis.traces
             }
             remaining_tasks = self._limits.tasks
+            available_tools = tuple(
+                tool
+                for tool in TOOLS.values()
+                if tool.name != "virustotal_hash" or self._virustotal is not None
+            )
 
             for round_index in range(self._limits.rounds):
                 remaining_seconds = int(deadline - time.monotonic())
@@ -82,7 +122,7 @@ class Analyzer:
                     tasks=remaining_tasks,
                     seconds=remaining_seconds,
                 )
-                plan = self._agent.plan(analysis, tuple(TOOLS.values()), round_limits)
+                plan = self._agent.plan(analysis, available_tools, round_limits)
                 if time.monotonic() >= deadline:
                     analysis = replace(
                         analysis,
@@ -90,24 +130,119 @@ class Analyzer:
                         + (Gap(scope="agent", reason="analysis deadline reached"),),
                     )
                     break
+                policy_step = self._progress.start(
+                    "policy", "Validate proposed analysis tasks"
+                )
                 approved, rejected = self._policy.approve(
                     plan,
                     analysis,
                     completed,
                     round_limits,
+                    {tool.name for tool in available_tools},
+                )
+                self._progress.finish(
+                    policy_step,
+                    "policy",
+                    "Validate proposed analysis tasks",
+                    detail=(
+                        f"Approved {len(approved)} task(s); "
+                        f"recorded {len(rejected)} policy note(s)"
+                    ),
                 )
                 analysis = replace(
                     analysis,
                     gaps=analysis.gaps
-                    + tuple(Gap(scope="agent", reason=gap) for gap in plan.gaps)
+                    + (
+                        tuple(Gap(scope="agent", reason=gap) for gap in plan.gaps)
+                        if not approved
+                        else ()
+                    )
                     + rejected,
                 )
-                if plan.stop or not approved:
+                if not approved:
                     break
                 for task in approved:
-                    analysis = self._merge(analysis, sandbox.execute(task))
+                    artifact = next(
+                        (item for item in analysis.artifacts if item.id == task.artifact),
+                        None,
+                    )
+                    is_virustotal = task.name == "virustotal_hash"
+                    stage = "enrichment" if is_virustotal else "analysis"
+                    action = (
+                        "Check existing VirusTotal file report"
+                        if is_virustotal
+                        else f"Run {task.name} analysis"
+                    )
+                    task_step = self._progress.start(
+                        stage,
+                        action,
+                        artifact=artifact.name if artifact is not None else task.artifact,
+                        tool="VirusTotal" if is_virustotal else task.name,
+                    )
+                    try:
+                        if is_virustotal:
+                            if self._virustotal is None or artifact is None:
+                                raise RuntimeError("VirusTotal enrichment is unavailable")
+                            result = self._virustotal.lookup(artifact)
+                        else:
+                            result = sandbox.execute(task)
+                        analysis = self._merge(analysis, result)
+                    except Exception as error:
+                        self._progress.finish(
+                            task_step,
+                            stage,
+                            action,
+                            status="failed",
+                            artifact=(
+                                artifact.name if artifact is not None else task.artifact
+                            ),
+                            tool="VirusTotal" if is_virustotal else task.name,
+                            detail=type(error).__name__,
+                        )
+                        raise
+                    skipped = is_virustotal and bool(result.gaps) and not result.evidence
+                    self._progress.finish(
+                        task_step,
+                        stage,
+                        action,
+                        status="skipped" if skipped else "completed",
+                        artifact=artifact.name if artifact is not None else task.artifact,
+                        tool="VirusTotal" if is_virustotal else task.name,
+                        detail=result.gaps[0].reason if skipped else "",
+                    )
                     completed.add((task.name, task.artifact))
                     remaining_tasks -= 1
+                if plan.stop:
+                    break
+
+        if self._correlator is not None:
+            correlation_step = self._progress.start(
+                "correlation", "Compare with prior local investigations",
+                tool="SQLite",
+            )
+            try:
+                analysis = self._merge(analysis, self._correlator.correlate(analysis))
+            except Exception as error:
+                self._progress.finish(
+                    correlation_step,
+                    "correlation",
+                    "Compare with prior local investigations",
+                    status="failed",
+                    tool="SQLite",
+                    detail=type(error).__name__,
+                )
+                analysis = replace(
+                    analysis,
+                    failures=analysis.failures
+                    + (Failure(scope="correlation", error=type(error).__name__),),
+                )
+            else:
+                self._progress.finish(
+                    correlation_step,
+                    "correlation",
+                    "Compare with prior local investigations",
+                    tool="SQLite",
+                )
 
         return analysis
 

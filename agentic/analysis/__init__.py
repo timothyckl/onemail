@@ -2,6 +2,7 @@
 
 from .agent import Agent, LangChainAgent
 from .analyzer import Analyzer
+from .correlation import SQLiteCorrelator
 from .models import (
     Analysis,
     Artifact,
@@ -21,6 +22,7 @@ from .models import (
 )
 from .policy import Policy
 from .sandbox import DockerSandbox, Sandbox
+from .virustotal import VirusTotalClient, VirusTotalConfig
 
 __all__ = [
     "Agent",
@@ -42,6 +44,9 @@ __all__ = [
     "Policy",
     "Preview",
     "Sandbox",
+    "SQLiteCorrelator",
     "Task",
     "Trace",
+    "VirusTotalClient",
+    "VirusTotalConfig",
 ]

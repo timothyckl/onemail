@@ -7,16 +7,18 @@ reaches the sandbox — the sandbox only runs on flagged emails. Each fixture th
 carries one attachment crafted to exercise a specific baseline task or agent
 tool in agentic/analysis/image/runner.py.
 
-Everything here is inert and safe: a standard EICAR test string, header-only
-files, macro *tokens* as text, and benign scripts. Nothing is a working exploit;
-the sandbox only inspects these statically.
+Everything here is inert and safe: header-only files, macro *tokens* as text,
+and benign scripts. Nothing is a working exploit; rendering is offline and PE
+behaviour is exercised only through CPU/API emulation.
 
-Run:  python make_agentic_samples.py OUTPUT_DIR
+Install fixture dependencies first with ``pip install -e \".[dev]\"``.
+Then run:  python make_agentic_samples.py OUTPUT_DIR
 """
 
 import io
 import struct
 import sys
+import tempfile
 import zipfile
 from email.message import EmailMessage
 from pathlib import Path
@@ -202,11 +204,6 @@ def suspicious_script() -> bytes:
     )
 
 
-EICAR = (
-    b"X5O!P%@AP[4\\PZX54(P^)7CC)7}$EICAR-STANDARD-ANTIVIRUS-TEST-FILE!$H+H*"
-)
-
-
 def strings_blob() -> bytes:
     """A binary with readable IOC-like strings for the `strings` task."""
     return (
@@ -245,7 +242,7 @@ def build_all(out_dir: Path) -> list:
 
     add("02_profile_type_mismatch.eml", "Statement attached",
         type_mismatch_blob(), "statement.pdf", "application", "pdf",
-        "profile: extension/declared says PDF, magic bytes are 'MZ' -> type mismatch + entropy")
+        "profile: extension/declared says PDF, magic bytes are 'MZ' -> type mismatch")
 
     add("03_identify_disguised.eml", "Photo enclosed",
         (lambda: __import__("io").BytesIO())() and None or _png_bytes(), "logo.dat", "application", "octet-stream",
@@ -258,10 +255,6 @@ def build_all(out_dir: Path) -> list:
     add("05_yara_powershell.eml", "Log excerpt",
         powershell_text(), "log.txt", "text", "plain",
         "yara: matches Suspicious_PowerShell_Encoded_Command")
-
-    add("06_antivirus_eicar.eml", "Invoice attached",
-        EICAR, "invoice.com", "application", "octet-stream",
-        "antivirus: standard EICAR test string (ClamAV FOUND, if signatures present)")
 
     # Agent tools ----------------------------------------------------------- #
     add("07_archive_zip.eml", "Shipping documents",
@@ -292,6 +285,17 @@ def build_all(out_dir: Path) -> list:
         jpeg_with_exif(), "team.jpg", "image", "jpeg",
         "metadata: ExifTool reads Software/Make/UserComment/GPS")
 
+    html = envelope("Account review form")
+    html.add_alternative(
+        """<!doctype html><html><body><h1>Account review</h1>
+        <form action='https://account-check.example/submit'>
+        <label>Password <input type='password' name='password'></label>
+        </form></body></html>""",
+        subtype="html",
+    )
+    (out_dir / "14_html_render.eml").write_bytes(html.as_bytes())
+    fixtures.append(("14_html_render.eml", "render: HTML body is extracted for offline rendering and OCR"))
+
     return fixtures
 
 
@@ -302,10 +306,25 @@ def _png_bytes() -> bytes:
     return buffer.getvalue()
 
 
+def generate_all(out_dir: Path) -> list:
+    """Build every fixture before publishing any output files."""
+
+    target = out_dir.expanduser().resolve()
+    target.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(
+        prefix=f".{target.name}-", dir=target.parent
+    ) as staging_name:
+        staging = Path(staging_name)
+        fixtures = build_all(staging)
+        target.mkdir(parents=True, exist_ok=True)
+        for source in staging.iterdir():
+            source.replace(target / source.name)
+    return fixtures
+
+
 def main() -> None:
     out_dir = Path(sys.argv[1] if len(sys.argv) > 1 else "agentic-samples")
-    out_dir.mkdir(parents=True, exist_ok=True)
-    fixtures = build_all(out_dir)
+    fixtures = generate_all(out_dir)
     for name, note in fixtures:
         print(f"  {name:32}  {note}")
     print(f"\nWrote {len(fixtures)} fixtures to {out_dir}/")

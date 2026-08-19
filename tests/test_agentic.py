@@ -1,7 +1,9 @@
 """Tests for agentic analysis boundaries and intelligence grounding."""
 
+import tempfile
 import unittest
 import time
+from dataclasses import replace
 from email.message import EmailMessage
 from pathlib import Path
 from typing import Any, Optional, cast
@@ -24,9 +26,12 @@ from agentic.analysis import (
     Policy,
     Preview,
     Sandbox,
+    SQLiteCorrelator,
     Task,
+    Trace,
 )
 from agentic.intelligence import Renderer, Reporter
+from agentic.progress import ProgressTracker
 from agentic.timeout import invoke
 from detection import Detection, DetectionEngine, Email
 
@@ -59,6 +64,15 @@ def artifact(name: str = "message.eml", identifier: str = "email") -> Artifact:
         metrics=Metrics(entropy=1.0, printable_ratio=0.5),
         preview=Preview(head="00", tail="00"),
     )
+
+
+class RecordingAgent(Agent):
+    def __init__(self) -> None:
+        self.tools = ()
+
+    def plan(self, analysis, tools, limits):
+        self.tools = tuple(tool.name for tool in tools)
+        return Plan(stop=True)
 
 
 class FixedAgent(Agent):
@@ -176,6 +190,75 @@ class AnalysisTests(unittest.TestCase):
 
         self.assertTrue(any(gap.scope == "shell:email" for gap in analysis.gaps))
 
+    def test_virustotal_tool_is_only_offered_when_configured(self) -> None:
+        email, detection = flagged_email()
+        sandbox = FakeSandbox(Batch(artifacts=(artifact(),)))
+        disabled = RecordingAgent()
+        Analyzer(lambda case, limits: sandbox, disabled).analyze(
+            Case(email=email, detection=detection)
+        )
+
+        sandbox = FakeSandbox(Batch(artifacts=(artifact(),)))
+        enabled = RecordingAgent()
+        virustotal = type("VirusTotal", (), {"lookup": lambda self, item: Batch()})()
+        Analyzer(
+            lambda case, limits: sandbox,
+            enabled,
+            virustotal=virustotal,
+        ).analyze(Case(email=email, detection=detection))
+
+        self.assertNotIn("virustotal_hash", disabled.tools)
+        self.assertIn("virustotal_hash", enabled.tools)
+
+    def test_routes_virustotal_tasks_to_the_host_broker(self) -> None:
+        email, detection = flagged_email()
+        sandbox = FakeSandbox(Batch(artifacts=(artifact(),)))
+        plans = (
+            Plan(tasks=(Task("virustotal_hash", "email"),), stop=True),
+        )
+        calls = []
+
+        class VirusTotal:
+            def lookup(self, item):
+                calls.append(item.id)
+                trace = Trace(
+                    id="vt-trace",
+                    task="virustotal_hash",
+                    artifact=item.id,
+                    tool="VirusTotal API v3",
+                    version="v3",
+                    status="success",
+                    duration_ms=1,
+                )
+                evidence = Evidence(
+                    id="vt-evidence",
+                    origin="analysis",
+                    kind="virustotal",
+                    value={"sha256": item.sha256, "file_uploaded_by_onemail": False},
+                    artifact=item.id,
+                    trace=trace.id,
+                )
+                return Batch(traces=(trace,), evidence=(evidence,))
+
+        events = []
+        analysis = Analyzer(
+            lambda case, limits: sandbox,
+            FixedAgent(plans),
+            virustotal=VirusTotal(),
+            progress=ProgressTracker(events.append),
+        ).analyze(Case(email=email, detection=detection))
+
+        self.assertEqual(calls, ["email"])
+        self.assertTrue(any(item.kind == "virustotal" for item in analysis.evidence))
+        self.assertTrue(
+            any(
+                event.stage == "enrichment"
+                and event.action == "Check existing VirusTotal file report"
+                and event.status == "completed"
+                for event in events
+            )
+        )
+
     def test_policy_rejects_inapplicable_and_unknown_tasks(self) -> None:
         email, detection = flagged_email()
         analysis = Analysis(
@@ -200,6 +283,35 @@ class AnalysisTests(unittest.TestCase):
         self.assertEqual(approved, ())
         self.assertEqual(len(rejected), 2)
 
+    def test_policy_rejects_invalid_typed_option_values(self) -> None:
+        email, detection = flagged_email()
+        html_artifact = replace(
+            artifact(),
+            name="body.html",
+            format=Format(detected="text/html", extension="html"),
+        )
+        analysis = Analysis(
+            detection=detection,
+            artifacts=(html_artifact,),
+            traces=(),
+            evidence=(),
+            observations=(),
+            gaps=(),
+            failures=(),
+            image=None,
+        )
+
+        approved, rejected = Policy().approve(
+            Plan(tasks=(Task("render", "email", {"pages": "999"}),)),
+            analysis,
+            (),
+            Limits(),
+        )
+
+        self.assertEqual(len(approved), 1)
+        self.assertEqual(approved[0].options, {})
+        self.assertIn("bounded default", rejected[0].reason)
+
     def test_langchain_agent_returns_typed_tasks_from_an_injected_model(self) -> None:
         _, detection = flagged_email()
         analysis = Analysis(
@@ -218,7 +330,6 @@ class AnalysisTests(unittest.TestCase):
                     {
                         "name": "metadata",
                         "artifact": "email",
-                        "options": {},
                         "rationale": "Collect available metadata.",
                     }
                 ],
@@ -318,10 +429,16 @@ class IntelligenceTests(unittest.TestCase):
         second = Renderer().render(report)
 
         self.assertEqual(first, second)
+        self.assertIn("Investigation Overview", first)
+        self.assertIn("Detection signals", first)
+        self.assertIn("Grounded analysis observations", first)
         self.assertIn("Diamond Model", first)
         self.assertIn("MITRE ATT&CK", first)
         self.assertIn("Cyber Kill Chain", first)
+        self.assertIn("<details>", first)
         self.assertEqual(report.model, "placeholder-model")
+        self.assertEqual(report.detection[0].detector, "reply_to_divergence")
+        self.assertEqual(report.detection[0].severity, "medium")
         self.assertNotIn("verdict", report.model_dump())
         self.assertIsInstance(report.model_dump_json(), str)
 
@@ -330,16 +447,83 @@ class IntelligenceTests(unittest.TestCase):
         self.assertNotIn("<img", rendered)
         self.assertIn("&lt;img", rendered)
 
-    def test_rejects_report_with_unknown_evidence_after_retry(self) -> None:
+    def test_prunes_unsupported_optional_enrichments_after_retry(self) -> None:
         analysis = self._analysis()
         model = StructuredModel(self._draft("invented"))
+
+        report = Reporter(model, name="placeholder-model").report(analysis)
+
+        self.assertEqual(model.calls, 2)
+        self.assertEqual(report.indicators, ())
+        self.assertEqual(report.diamond.infrastructure, ())
+        self.assertEqual(report.attack.mappings, ())
+        self.assertEqual(report.chain.mappings, ())
+
+    def test_does_not_turn_virustotal_provider_metadata_into_an_ioc(self) -> None:
+        analysis = self._analysis()
+        vt_trace = Trace(
+            id="vt-trace",
+            task="virustotal_hash",
+            artifact="email",
+            tool="VirusTotal API v3",
+            version="v3",
+            status="success",
+            duration_ms=1,
+        )
+        vt_evidence = Evidence(
+            id="vt-evidence",
+            origin="analysis",
+            kind="virustotal",
+            value={
+                "sha256": "0" * 64,
+                "permalink": "https://www.virustotal.com/gui/file/" + "0" * 64,
+            },
+            artifact="email",
+            trace=vt_trace.id,
+        )
+        analysis = replace(
+            analysis,
+            traces=(vt_trace,),
+            evidence=analysis.evidence + (vt_evidence,),
+        )
+        draft = self._draft("ev1")
+        provider_url = "https://www.virustotal.com/gui/file/" + "0" * 64
+        draft["indicators"] = [
+            {"type": "url", "value": provider_url, "evidence": ["vt-evidence"]}
+        ]
+        draft["diamond"] = {
+            "adversary": [],
+            "infrastructure": [
+                {
+                    "value": provider_url,
+                    "confidence": "medium",
+                    "evidence": ["vt-evidence"],
+                }
+            ],
+            "capability": [],
+            "victim": [],
+        }
+
+        report = Reporter(StructuredModel(draft), name="placeholder-model").report(
+            analysis
+        )
+
+        self.assertEqual(report.indicators, ())
+        self.assertEqual(report.diamond.infrastructure, ())
+
+    def test_rejects_an_unknown_claim_reference_after_retry(self) -> None:
+        analysis = self._analysis()
+        draft = self._draft("ev1")
+        claims = cast(list[dict[str, Any]], draft["claims"])
+        claims[0]["observation"] = "invented"
+        model = StructuredModel(draft)
 
         with self.assertRaises(ValueError):
             Reporter(model, name="placeholder-model").report(analysis)
 
         self.assertEqual(model.calls, 2)
 
-    def test_rejects_semantically_unsupported_attack_mapping(self) -> None:
+    def test_prunes_semantically_unsupported_attack_mapping(self) -> None:
         analysis = self._analysis()
         draft = self._draft("ev1")
         attack = cast(dict[str, Any], draft["attack"])
@@ -347,8 +531,9 @@ class IntelligenceTests(unittest.TestCase):
         mappings[0]["id"] = "T1027"
         model = StructuredModel(draft)
 
-        with self.assertRaises(ValueError):
-            Reporter(model, name="placeholder-model").report(analysis)
+        report = Reporter(model, name="placeholder-model").report(analysis)
+
+        self.assertEqual(report.attack.mappings, ())
 
     def test_json_reporter_retries_a_parsing_error(self) -> None:
         analysis = self._analysis()
@@ -500,6 +685,85 @@ class _Client:
     def __init__(self, container, run_error=None) -> None:
         self.containers = _Containers(container, run_error)
         self.images = _Images()
+
+
+class CorrelationTests(unittest.TestCase):
+    def test_correlates_normalised_artifacts_without_storing_message_bytes(self) -> None:
+        first = IntelligenceTests._analysis()
+        second = replace(
+            first,
+            detection=replace(
+                first.detection,
+                file="second.eml",
+                sha256="1" * 64,
+            ),
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            correlator = SQLiteCorrelator(Path(directory) / "correlation.sqlite3")
+            initial = correlator.correlate(first)
+            matched = correlator.correlate(second)
+
+        self.assertIn("no relationships", initial.observations[0].summary)
+        value = matched.evidence[0].value
+        self.assertIsInstance(value, dict)
+        assert isinstance(value, dict)
+        self.assertTrue(value["exact_artifact_matches"])
+        self.assertFalse(value["raw_message_stored"])
+
+
+    def test_correlates_near_duplicate_similarity_hashes(self) -> None:
+        first = IntelligenceTests._analysis()
+        first = replace(
+            first,
+            artifacts=(replace(first.artifacts[0], similarity_hash="a" * 16),),
+        )
+        second = replace(
+            first,
+            detection=replace(first.detection, file="second.eml", sha256="1" * 64),
+            artifacts=(
+                replace(
+                    first.artifacts[0],
+                    sha256="2" * 64,
+                    similarity_hash="a" * 16,
+                ),
+            ),
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            correlator = SQLiteCorrelator(Path(directory) / "correlation.sqlite3")
+            correlator.correlate(first)
+            matched = correlator.correlate(second)
+
+        value = matched.evidence[0].value
+        self.assertIsInstance(value, dict)
+        assert isinstance(value, dict)
+        self.assertTrue(value["similar_artifact_matches"])
+
+
+class ProgressTests(unittest.TestCase):
+    def test_records_step_and_total_durations(self) -> None:
+        now = [10.0]
+        events = []
+        progress = ProgressTracker(events.append, clock=lambda: now[0])
+
+        step = progress.start(
+            "container",
+            "Inspect archive",
+            artifact="sample.zip",
+            tool="7z",
+        )
+        now[0] += 1.25
+        progress.finish(
+            step,
+            "container",
+            "Inspect archive",
+            artifact="sample.zip",
+            tool="7z",
+        )
+
+        self.assertEqual([event.status for event in events], ["running", "completed"])
+        self.assertEqual(events[1].duration_ms, 1250)
+        self.assertEqual(events[1].total_elapsed_ms, 1250)
+        self.assertEqual(events[1].step_id, events[0].step_id)
 
 
 class TimeoutTests(unittest.TestCase):

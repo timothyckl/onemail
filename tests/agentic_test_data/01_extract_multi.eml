@@ -4,16 +4,16 @@ Reply-To: billing@ms-account-verify.example
 Subject: Your two documents
 Authentication-Results: mx.corp.example; spf=fail; dkim=fail; dmarc=fail
 MIME-Version: 1.0
-Content-Type: multipart/mixed; boundary="===============1390924657698915502=="
+Content-Type: multipart/mixed; boundary="===============0948314877570601766=="
 
---===============1390924657698915502==
+--===============0948314877570601766==
 Content-Type: text/plain; charset="utf-8"
 Content-Transfer-Encoding: quoted-printable
 
 Our records show unusual sign-in activity. Please verify your account at http=
 s://secure-login.account-check.example/verify to avoid suspension.
 
---===============1390924657698915502==
+--===============0948314877570601766==
 Content-Type: application/octet-stream
 Content-Transfer-Encoding: base64
 Content-Disposition: attachment; filename="payload.bin"
@@ -92,7 +92,7 @@ rYg7/BDV36CEFe2kjTLMGbpP9D1upqW5ayBJoCO2qii/itMm7MTHS2gt5SFPjhbDJsa8X6SuWm1E
 rQOsjBqE4RpUUU9zozD1i82nihR4JjmHQ/Uc86Lceoh9lMHjiPBCF2HLrn9rsFRGbEwYs+mUMjU9
 tqwye8GakAkTFgD5hgINJlp96BPgIvCD7AME2PhoiSwYRzoxooOyyZnlu2Te21QdFQ==
 
---===============1390924657698915502==
+--===============0948314877570601766==
 Content-Type: text/plain
 Content-Transfer-Encoding: base64
 Content-Disposition: attachment; filename="notes.txt"
@@ -100,4 +100,4 @@ MIME-Version: 1.0
 
 UGxhaW4gbm90ZXMgZm9yIHRoZSByZWNvbmNpbGUvZXh0cmFjdCB0ZXN0Lgo=
 
---===============1390924657698915502==--
+--===============0948314877570601766==--
