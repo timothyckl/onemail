@@ -14,7 +14,8 @@ access is permitted.
 from dataclasses import dataclass, field
 from typing import Final, Optional, Tuple, Union
 
-from ..brands import brand_matches_domain, find_content_brand
+from ..brands import brand_matches_domain, content_brand_present, find_content_brand
+from .. import textnorm
 from ..data_models import (
     ClearResult,
     DetectorName,
@@ -25,7 +26,8 @@ from ..data_models import (
     SkippedResult,
 )
 from .base import Detector
-from .detectors import message_text
+from .detectors import matching_phrases, message_text
+from .lexicon import CREDENTIAL_LANGUAGE, URGENCY_LANGUAGE
 
 
 @dataclass(frozen=True)
@@ -61,6 +63,36 @@ class BrandContentMismatchDetector(Detector[BrandContentMismatchFinding]):
 
         brand = find_content_brand(text)
         if brand is None:
+            return ClearResult(detector=self.name)
+
+        if observables.is_mailing_list:
+            # Distribution-list traffic discusses brands as news; treating the
+            # mention as an impersonation claim is not judgeable here.
+            return SkippedResult(
+                detector=self.name,
+                reason="mailing-list message: brand mentions are discussion",
+            )
+
+        # A brand named in running body text is discussion, not impersonation.
+        # Require the claim where a lure makes it (subject or display name) or,
+        # failing that, credential/urgency language alongside the body mention.
+        header_text = " ".join(
+            part
+            for part in (
+                observables.normalized_subject
+                or textnorm.normalize(observables.subject or ""),
+                textnorm.normalize(observables.display_name or ""),
+            )
+            if part
+        )
+        claimed_in_header = (
+            content_brand_present(header_text, brand)
+            or find_content_brand(header_text) is not None
+        )
+        lure_language = matching_phrases(
+            text, CREDENTIAL_LANGUAGE + URGENCY_LANGUAGE
+        )
+        if not claimed_in_header and not lure_language:
             return ClearResult(detector=self.name)
 
         from_domain = (observables.from_domain or "").lower() or None

@@ -82,9 +82,13 @@ class PhishingPotTests(unittest.TestCase):
         # Every corpus email is phishing, so flagged/processed is recall.
         # Ratchet this floor upward as detection phases land; it exists to
         # stop silent recall regressions. History: 0.48 baseline, 0.59 after
-        # lexicons, 0.73 after brand rules, 0.78 after structural rules.
+        # lexicons, 0.73 after brand rules, 0.78 after structural rules,
+        # 0.73 after the precision phase (SpamAssassin-ham false positives
+        # cut 44.99% -> 3.64% by trading away single-signal catches: lone
+        # generic credential tokens, contextless brand mentions, and
+        # mailing-list Reply-To divergence).
         recall = self.report.flagged_count / self.report.processed_count
-        self.assertGreaterEqual(recall, 0.75)
+        self.assertGreaterEqual(recall, 0.72)
 
     def test_automatically_validates_all_corpus_findings(self) -> None:
         self.assertTrue(self.report.validation_passed)

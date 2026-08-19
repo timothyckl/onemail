@@ -107,6 +107,42 @@ class BrandContentMismatchDetectorTests(unittest.TestCase):
         )
         self.assertTrue(self._fired(detection))
 
+    def test_clear_on_body_mention_without_impersonation_context(self) -> None:
+        # Brand named only in running body text, no credential or urgency
+        # language: that is discussion, not impersonation.
+        detection = self.engine.detect(
+            _email(
+                "Colleague <pal@randomsender.test>",
+                "Interesting article",
+                "Binance had an outage yesterday: https://news-site.test/story",
+            )
+        )
+        self.assertFalse(self._fired(detection))
+
+    def test_fires_on_body_mention_with_lure_language(self) -> None:
+        detection = self.engine.detect(
+            _email(
+                "Support <help@randomsender.test>",
+                "Action needed",
+                "Binance flagged unusual activity. "
+                "Please verify your account: https://axobox.com/vt/track",
+            )
+        )
+        self.assertTrue(self._fired(detection))
+
+    def test_skips_on_mailing_list_traffic(self) -> None:
+        content = (
+            "From: Member <member@randomsender.test>\r\n"
+            "Subject: Binance Cybersecurity\r\n"
+            "List-Id: <discuss.example.org>\r\n"
+            "MIME-Version: 1.0\r\n"
+            "Content-Type: text/plain; charset=utf-8\r\n"
+            "\r\n"
+            "Read this: https://axobox.com/vt/track\r\n"
+        ).encode("utf-8")
+        detection = self.engine.detect(Email(file="list.eml", content=content))
+        self.assertFalse(self._fired(detection))
+
     def test_clear_when_sender_belongs_to_brand(self) -> None:
         detection = self.engine.detect(
             _email(

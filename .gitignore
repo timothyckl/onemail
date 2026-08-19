@@ -2,6 +2,11 @@
 __pycache__/
 *.py[codz]
 *$py.class
+/email
+*.DS_Store
+*.gitignore
+*.zip
+.env
 
 # C extensions
 *.so
@@ -216,3 +221,13 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# --- OneMail project cruft (added during cleanup) ---
+# Stray archive that was committed by accident.
+Archive.zip
+# Local honeypot corpus (data, not source).
+/dataset/phishing_pot/email/*
+!/dataset/phishing_pot/email/.gitkeep
+/dataset/spamassassin/
+/dataset/nazario/
+/phishing-pot-report.json

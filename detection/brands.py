@@ -199,6 +199,17 @@ def find_content_brand(normalized_text: str) -> Optional[str]:
     return None
 
 
+def content_brand_present(normalized_text: str, brand: str) -> bool:
+    """Return True when ``brand`` itself occurs in already-normalized text."""
+
+    if not normalized_text or not brand:
+        return False
+    for candidate, pattern in _CONTENT_BRAND_PATTERNS:
+        if candidate == brand:
+            return bool(pattern.search(normalized_text))
+    return False
+
+
 def brand_matches_domain(brand: str, host: Optional[str]) -> bool:
     """Return True when ``host`` plausibly belongs to ``brand``.
 

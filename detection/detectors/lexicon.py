@@ -21,6 +21,12 @@ from typing import Final, Tuple
 # Phrases that solicit a credential, identity, account, or payment action.
 # Consumed by ``CredentialUrlDetector`` and always paired with a URL host that
 # is unrelated to the sender, so breadth here does not fire on its own.
+# Single generic tokens from ``CREDENTIAL_LANGUAGE`` that appear routinely in
+# legitimate mail ("login details below", "use your login"). They may only
+# corroborate: ``CredentialUrlDetector`` requires either one non-weak phrase or
+# at least two distinct matches before it fires.
+WEAK_CREDENTIAL_TOKENS: Final[frozenset] = frozenset({"signin", "login", "log in"})
+
 CREDENTIAL_LANGUAGE: Final[Tuple[str, ...]] = (
     # --- original list (kept first for stable evidence ordering) ---
     "verify your account",

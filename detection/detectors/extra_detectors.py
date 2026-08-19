@@ -121,6 +121,14 @@ def _is_ip_literal(host: str) -> bool:
         return False
 
 
+def _is_loopback(address: str) -> bool:
+    """True when the address is a loopback IP (e.g. 127.0.0.1 or ::1)."""
+    try:
+        return ipaddress.ip_address(address).is_loopback
+    except ValueError:
+        return False
+
+
 def _is_non_public(address: str) -> bool:
     """True for private, loopback, link-local, reserved, or otherwise non-routable IPs."""
     try:
@@ -422,7 +430,11 @@ class DuplicateHeaderConflictDetector(Detector[DuplicateHeaderConflictFinding]):
     """Fire when an identity header appears multiple times with conflicting values."""
 
     name = DetectorName.DUPLICATE_HEADER_CONFLICT
-    _CRITICAL = frozenset({"from", "subject", "date", "sender", "return-path"})
+    # ``return-path`` is deliberately absent: every local re-delivery hop
+    # (fetchmail, procmail) legitimately prepends another Return-Path, so
+    # conflicts there carry no spoofing signal. It stays observable in
+    # ``duplicate_headers``; only the judgment ignores it.
+    _CRITICAL = frozenset({"from", "subject", "date", "sender"})
 
     def detect(self, observables: MessageObservables):
         conflicts = tuple(
@@ -508,8 +520,17 @@ class PrivateSenderIpDetector(Detector[PrivateSenderIpFinding]):
             return ClearResult(detector=self.name)
 
         addresses = [ip.address for ip in observables.sender_ips]
-        non_public = tuple(a for a in addresses if _is_non_public(a))
-        has_public = any(not _is_non_public(a) for a in addresses)
+        external = tuple(a for a in addresses if not _is_loopback(a))
+        if not external:
+            # Loopback-only chains (e.g. fetchmail or local re-delivery) show
+            # nothing about the true origin, so the signal is unobservable.
+            return SkippedResult(
+                detector=self.name,
+                reason="only loopback relay hops observable",
+            )
+
+        non_public = tuple(a for a in external if _is_non_public(a))
+        has_public = any(not _is_non_public(a) for a in external)
 
         if not non_public or has_public:
             return ClearResult(detector=self.name)

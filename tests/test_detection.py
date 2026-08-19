@@ -172,6 +172,17 @@ class DetectorTests(unittest.TestCase):
         self.assertIsInstance(clear, ClearResult)
         self.assertIsInstance(skipped, SkippedResult)
 
+    def test_reply_to_divergence_skips_on_mailing_list(self) -> None:
+        skipped = ReplyToDivergenceDetector().detect(
+            MessageObservables(
+                from_domain="sender.example",
+                reply_to_domain="list.example",
+                reply_to_differs=True,
+                is_mailing_list=True,
+            )
+        )
+        self.assertIsInstance(skipped, SkippedResult)
+
     def test_credential_url_requires_mismatch_and_language(self) -> None:
         detector = CredentialUrlDetector()
         fired = detector.detect(
@@ -197,6 +208,27 @@ class DetectorTests(unittest.TestCase):
         self.assertIsInstance(fired.finding, CredentialUrlFinding)
         self.assertIsInstance(clear, ClearResult)
         self.assertIsInstance(skipped, SkippedResult)
+
+    def test_credential_url_ignores_a_lone_generic_token(self) -> None:
+        detector = CredentialUrlDetector()
+        lone_token = detector.detect(
+            MessageObservables(
+                from_domain="sender.example",
+                body_text="Use your login details on the wiki",
+                urls=("https://wiki.example/page",),
+                url_hosts=("wiki.example",),
+            )
+        )
+        two_tokens = detector.detect(
+            MessageObservables(
+                from_domain="sender.example",
+                body_text="signin here or log in now",
+                urls=("https://evil.example/x",),
+                url_hosts=("evil.example",),
+            )
+        )
+        self.assertIsInstance(lone_token, ClearResult)
+        self.assertIsInstance(two_tokens, FiredResult)
 
     def test_display_name_spoof_fires(self) -> None:
         detector = DisplayNameSpoofDetector()
@@ -364,6 +396,59 @@ class ExtraDetectorTests(unittest.TestCase):
         )
         self.assertIsInstance(only_private, FiredResult)
         self.assertIsInstance(mixed, ClearResult)
+
+    def test_private_sender_ip_skips_on_loopback_only_chain(self) -> None:
+        from detection.detectors import PrivateSenderIpDetector
+        from detection.data_models import SenderIp
+
+        loopback_only = PrivateSenderIpDetector().detect(
+            MessageObservables(
+                sender_ips=(
+                    SenderIp(address="127.0.0.1", hop=1, trusted=False),
+                    SenderIp(address="127.0.0.1", hop=2, trusted=False),
+                )
+            )
+        )
+        self.assertIsInstance(loopback_only, SkippedResult)
+
+    def test_duplicate_header_conflict_ignores_return_path(self) -> None:
+        from detection.detectors import DuplicateHeaderConflictDetector
+        from detection.data_models import DuplicateHeader
+
+        result = DuplicateHeaderConflictDetector().detect(
+            MessageObservables(
+                duplicate_headers=(
+                    DuplicateHeader(
+                        name="return-path",
+                        values=("<a@x.example>", "<b@y.example>"),
+                        selected_value="<a@x.example>",
+                        reason="'return-path' appears 2 times with different values",
+                    ),
+                )
+            )
+        )
+        self.assertIsInstance(result, ClearResult)
+
+    def test_parser_marks_mailing_list_messages(self) -> None:
+        message = EmailMessage()
+        message["From"] = "member@example.org"
+        message["Subject"] = "list traffic"
+        message["List-Id"] = "<discuss.example.org>"
+        message.set_content("hello")
+        observables = EmailParser().parse(
+            Email(file="list.eml", content=message.as_bytes())
+        )
+        self.assertTrue(observables.is_mailing_list)
+
+        bulk = EmailMessage()
+        bulk["From"] = "blast@example.org"
+        bulk["Subject"] = "promo"
+        bulk["Precedence"] = "bulk"
+        bulk.set_content("hello")
+        observables = EmailParser().parse(
+            Email(file="bulk.eml", content=bulk.as_bytes())
+        )
+        self.assertFalse(observables.is_mailing_list)
 
     def test_image_only_body_fires(self) -> None:
         from detection.detectors import ImageOnlyBodyDetector

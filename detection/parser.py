@@ -145,6 +145,7 @@ class EmailParser:
                 has_html=content.has_html,
                 has_plain=content.has_plain,
                 mime_depth=self._mime_depth(message),
+                is_mailing_list=self._is_mailing_list(message),
                 from_domain=sender.from_domain,
                 reply_to_domain=sender.reply_to_domain,
                 reply_to_differs=sender.reply_to_differs,
@@ -177,6 +178,21 @@ class EmailParser:
                 byte_count=len(email.content),
                 parse_error=type(error).__name__,
             )
+
+    @staticmethod
+    def _is_mailing_list(message: Message) -> bool:
+        """Return True when mailing-list infrastructure headers are present.
+
+        Deliberately excludes ``List-Unsubscribe`` and ``Precedence: bulk``:
+        bulk marketing and phishing both add those freely, so they do not
+        evidence a real distribution list.
+        """
+
+        for name in ("List-Id", "List-Post", "Mailing-List", "X-Mailing-List"):
+            if EmailParser._header(message, name) is not None:
+                return True
+        precedence = EmailParser._header(message, "Precedence") or ""
+        return precedence.strip().lower() == "list"
 
     @staticmethod
     def _header(message: Message, name: str, limit: Optional[int] = None) -> Optional[str]:

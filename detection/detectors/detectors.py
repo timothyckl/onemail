@@ -26,7 +26,12 @@ from ..data_models import (
 from .base import Detector
 from ..brands import brand_matches_domain
 from ..domains import registered_domain as _registered_domain
-from .lexicon import ADVANCE_FEE_LANGUAGE, CREDENTIAL_LANGUAGE, URGENCY_LANGUAGE
+from .lexicon import (
+    ADVANCE_FEE_LANGUAGE,
+    CREDENTIAL_LANGUAGE,
+    URGENCY_LANGUAGE,
+    WEAK_CREDENTIAL_TOKENS,
+)
 from .. import textnorm
 
 __all__ = [
@@ -98,6 +103,11 @@ class ReplyToDivergenceDetector(Detector[ReplyToDivergenceFinding]):
             return SkippedResult(detector=self.name, reason="no Reply-To header present")
         if not observables.reply_to_differs:
             return ClearResult(detector=self.name)
+        if observables.is_mailing_list:
+            return SkippedResult(
+                detector=self.name,
+                reason="mailing-list message: Reply-To rewriting is expected",
+            )
 
         finding = ReplyToDivergenceFinding(
             clause=(
@@ -133,6 +143,15 @@ class CredentialUrlDetector(Detector[CredentialUrlFinding]):
         text = message_text(observables)
         matched_language = matching_phrases(text, CREDENTIAL_LANGUAGE)
         if not mismatched_hosts or not matched_language:
+            return ClearResult(detector=self.name)
+        strong_language = tuple(
+            phrase
+            for phrase in matched_language
+            if phrase not in WEAK_CREDENTIAL_TOKENS
+        )
+        if not strong_language and len(matched_language) < 2:
+            # A lone generic token ("login") is everyday vocabulary, not a
+            # credential lure; require a real phrase or corroborating matches.
             return ClearResult(detector=self.name)
 
         finding = CredentialUrlFinding(

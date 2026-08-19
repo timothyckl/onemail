@@ -85,6 +85,11 @@ class MessageObservables:
     has_plain: bool = False
     mime_depth: int = 0
 
+    # True when the message carries mailing-list infrastructure headers
+    # (List-Id, List-Post, Mailing-List, or Precedence: list/bulk). Lists
+    # legitimately rewrite Reply-To, so divergence rules must not judge them.
+    is_mailing_list: bool = False
+
     from_domain: Optional[str] = None
     reply_to_domain: Optional[str] = None
     reply_to_differs: Optional[bool] = None

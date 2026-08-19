@@ -12,7 +12,11 @@ for the rules added in Phases 1-6:
 - personal mail from a freemail address (freemail rule must require a brand
   or credential claim);
 - accented German text (subject-obfuscation rule must not count legitimate
-  non-ASCII).
+  non-ASCII);
+- SpamAssassin-corpus mailing-list traffic (Reply-To rewritten to the list
+  domain, brand names discussed as news), a loopback-only local delivery
+  chain, and a security advisory containing the word "login" (each was a
+  measured false-positive driver before the Phase A precision fixes).
 
 Every new detector or lexicon entry must keep this corpus at zero findings.
 """
