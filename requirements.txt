@@ -1,6 +1,6 @@
 docker>=7.1,<8
 langchain-core>=0.3,<2
-langchain-deepseek>=1.1,<2
+langchain-openai>=1.1,<2
 pydantic>=2.10,<3
 
 # Web front-end dependencies (in addition to OneMail's own requirements.txt).
