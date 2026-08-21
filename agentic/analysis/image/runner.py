@@ -9,6 +9,7 @@ import math
 import mimetypes
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -477,7 +478,16 @@ def pdf(artifact, path, options, limits):
         value = {}
         status, error = "failure", type(exc).__name__
     duration = elapsed(started)
-    progress_finish(event_id, "pdf", artifact["name"], "pypdf", status, duration, error)
+    progress_finish(
+        event_id,
+        "pdf",
+        artifact["name"],
+        "pypdf",
+        status,
+        duration,
+        error,
+        output=progress_output(value),
+    )
     item_trace = trace(
         "pdf", artifact["id"], "pypdf", version("pypdf"), duration, error,
         status=status,
@@ -538,7 +548,16 @@ def pe(artifact, path, options, limits):
         value = {}
         status, error = "failure", type(exc).__name__
     duration = elapsed(started)
-    progress_finish(event_id, "pe", artifact["name"], "pefile", status, duration, error)
+    progress_finish(
+        event_id,
+        "pe",
+        artifact["name"],
+        "pefile",
+        status,
+        duration,
+        error,
+        output=progress_output(value),
+    )
     item_trace = trace(
         "pe", artifact["id"], "pefile", version("pefile"), duration, error,
         status=status,
@@ -565,7 +584,15 @@ def script(artifact, path, options, limits):
         "longest_line": max((len(line) for line in text.splitlines()[:10000]), default=0),
     }
     duration = elapsed(started)
-    progress_finish(event_id, "script", artifact["name"], "python", "completed", duration)
+    progress_finish(
+        event_id,
+        "script",
+        artifact["name"],
+        "python",
+        "completed",
+        duration,
+        output=progress_output(value),
+    )
     item_trace = trace("script", artifact["id"], "python", "stdlib", duration, "")
     return result_from_value(artifact, item_trace, "script", value)
 
@@ -582,7 +609,15 @@ def embedded(artifact, path, options, limits):
             candidates.append((f"embedded-{offset}.{extension_for(kind)}", content[offset:]))
     children = register_children(artifact, candidates, limits, "embedded")
     duration = elapsed(started)
-    progress_finish(event_id, "embedded", artifact["name"], "python", "completed", duration)
+    progress_finish(
+        event_id,
+        "embedded",
+        artifact["name"],
+        "python",
+        "completed",
+        duration,
+        output=progress_output({"signatures": found, "carved": len(children["artifacts"])}),
+    )
     item_trace = trace("embedded", artifact["id"], "python", "stdlib", duration, "")
     item = evidence_item(
         "embedded", artifact["id"], item_trace["id"],
@@ -640,7 +675,15 @@ def decode(artifact, path, options, limits):
             seen.add(digest)
     children = register_children(artifact, candidates[:5], limits, "decode")
     duration = elapsed(started)
-    progress_finish(event_id, "decode", artifact["name"], "python", "completed", duration)
+    progress_finish(
+        event_id,
+        "decode",
+        artifact["name"],
+        "python",
+        "completed",
+        duration,
+        output=progress_output({"decoded_artifacts": len(children["artifacts"])}),
+    )
     item_trace = trace("decode", artifact["id"], "python", "stdlib", duration, "")
     item = evidence_item(
         "decode", artifact["id"], item_trace["id"],
@@ -680,7 +723,15 @@ def ioc(artifact, path, options, limits):
         "email_addresses": emails,
     }
     duration = elapsed(started)
-    progress_finish(event_id, "ioc", artifact["name"], "python", "completed", duration)
+    progress_finish(
+        event_id,
+        "ioc",
+        artifact["name"],
+        "python",
+        "completed",
+        duration,
+        output=progress_output(value),
+    )
     item_trace = trace("ioc", artifact["id"], "python", "stdlib", duration, "")
     return result_from_value(artifact, item_trace, "ioc", value)
 
@@ -709,7 +760,15 @@ def emulate_script(artifact, path, options, limits):
         "native_execution": False,
     }
     duration = elapsed(started)
-    progress_finish(event_id, "emulate_script", artifact["name"], "python", "completed", duration)
+    progress_finish(
+        event_id,
+        "emulate_script",
+        artifact["name"],
+        "python",
+        "completed",
+        duration,
+        output=progress_output(value),
+    )
     item_trace = trace("emulate_script", artifact["id"], "python", "stdlib", duration, "")
     return result_from_value(artifact, item_trace, "emulate_script", value)
 
@@ -913,7 +972,6 @@ def render_document(artifact, path, options, limits):
         traces.append(ocr_trace)
     duration = elapsed(started)
     status = "success" if text_trace["status"] == "success" or screenshot.is_file() else "failure"
-    progress_finish(event_id, "render", artifact["name"], "renderer", status, duration)
     item_trace = trace(
         "render", artifact["id"], "renderer", "1", duration, "" if status == "success" else "render output unavailable",
         status=status,
@@ -927,6 +985,15 @@ def render_document(artifact, path, options, limits):
         "screenshot_bytes": screenshot.stat().st_size if screenshot.is_file() else 0,
         "external_resources_fetched": False,
     }
+    progress_finish(
+        event_id,
+        "render",
+        artifact["name"],
+        "renderer",
+        status,
+        duration,
+        output=progress_output(value),
+    )
     all_traces = traces + [text_trace, image_trace, item_trace]
     if status != "success":
         return batch(
@@ -1033,7 +1100,12 @@ def identify(artifact, path, limits):
 
 
 def command(task_name, artifact, argv, limits, ok_codes=(0,)):
-    event_id, started = progress_start(task_name, artifact, Path(argv[0]).name)
+    event_id, started = progress_start(
+        task_name,
+        artifact,
+        Path(argv[0]).name,
+        shlex.join(str(item) for item in argv),
+    )
     try:
         runtime = Path("/work/runtime")
         home = runtime / "home"
@@ -1073,6 +1145,8 @@ def command(task_name, artifact, argv, limits, ok_codes=(0,)):
         status,
         duration,
         stderr[:500],
+        output=stdout,
+        exit_code=exit_code,
     )
     item_trace = trace(
         task_name,
@@ -1209,6 +1283,13 @@ def elapsed(started):
     return int((time.monotonic() - started) * 1000)
 
 
+def progress_output(value):
+    try:
+        return json.dumps(value, sort_keys=True, default=str)[:4000]
+    except (TypeError, ValueError):
+        return str(value)[:4000]
+
+
 def tool_version(executable):
     try:
         completed = subprocess.run(
@@ -1229,7 +1310,7 @@ def version(package):
         return "unknown"
 
 
-def progress_start(task_name, artifact, tool):
+def progress_start(task_name, artifact, tool, command=""):
     global EVENT_SEQUENCE
     EVENT_SEQUENCE += 1
     identifier = f"runner-{EVENT_SEQUENCE:04d}"
@@ -1241,6 +1322,7 @@ def progress_start(task_name, artifact, tool):
                 "action": ACTION_LABELS.get(task_name, task_name),
                 "artifact": safe_name(str(artifact)),
                 "tool": str(tool)[:80],
+                "command": str(command).replace("\x00", "")[:1000],
                 "status": "running",
             },
             sort_keys=True,
@@ -1259,6 +1341,8 @@ def progress_finish(
     status,
     duration_ms,
     detail="",
+    output="",
+    exit_code=None,
 ):
     print(
         json.dumps(
@@ -1275,6 +1359,8 @@ def progress_finish(
                 ),
                 "duration_ms": max(0, int(duration_ms)),
                 "detail": str(detail).replace("\x00", "")[:500],
+                "output": str(output).replace("\x00", "")[:4000],
+                "exit_code": exit_code if isinstance(exit_code, int) else None,
             },
             sort_keys=True,
             separators=(",", ":"),

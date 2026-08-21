@@ -750,6 +750,10 @@ class ProgressTests(unittest.TestCase):
             "Inspect archive",
             artifact="sample.zip",
             tool="7z",
+            actor="agent",
+            kind="tool",
+            rationale="The archive may contain additional evidence.",
+            command="7z l sample.zip",
         )
         now[0] += 1.25
         progress.finish(
@@ -758,12 +762,23 @@ class ProgressTests(unittest.TestCase):
             "Inspect archive",
             artifact="sample.zip",
             tool="7z",
+            actor="agent",
+            kind="tool",
+            rationale="The archive may contain additional evidence.",
+            command="7z l sample.zip",
+            output="file.exe",
+            exit_code=0,
         )
 
         self.assertEqual([event.status for event in events], ["running", "completed"])
         self.assertEqual(events[1].duration_ms, 1250)
         self.assertEqual(events[1].total_elapsed_ms, 1250)
         self.assertEqual(events[1].step_id, events[0].step_id)
+        self.assertEqual(events[1].actor, "agent")
+        self.assertEqual(events[1].kind, "tool")
+        self.assertEqual(events[1].command, "7z l sample.zip")
+        self.assertEqual(events[1].output, "file.exe")
+        self.assertEqual(events[1].exit_code, 0)
 
 
 class TimeoutTests(unittest.TestCase):

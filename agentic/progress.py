@@ -28,6 +28,12 @@ class ProgressEvent:
     artifact: Optional[str] = None
     tool: Optional[str] = None
     detail: str = ""
+    actor: str = "system"
+    kind: str = "activity"
+    rationale: str = ""
+    command: str = ""
+    output: str = ""
+    exit_code: Optional[int] = None
 
     def to_dict(self) -> dict[str, object]:
         return asdict(self)
@@ -62,6 +68,10 @@ class ProgressTracker:
         artifact: Optional[str] = None,
         tool: Optional[str] = None,
         detail: str = "",
+        actor: str = "system",
+        kind: str = "activity",
+        rationale: str = "",
+        command: str = "",
     ) -> str:
         with self._lock:
             self._steps += 1
@@ -75,6 +85,10 @@ class ProgressTracker:
             artifact=artifact,
             tool=tool,
             detail=detail,
+            actor=actor,
+            kind=kind,
+            rationale=rationale,
+            command=command,
         )
         return step_id
 
@@ -89,6 +103,12 @@ class ProgressTracker:
         tool: Optional[str] = None,
         detail: str = "",
         duration_ms: Optional[int] = None,
+        actor: str = "system",
+        kind: str = "activity",
+        rationale: str = "",
+        command: str = "",
+        output: str = "",
+        exit_code: Optional[int] = None,
     ) -> None:
         with self._lock:
             started = self._active.pop(step_id, None)
@@ -103,6 +123,12 @@ class ProgressTracker:
             artifact=artifact,
             tool=tool,
             detail=detail,
+            actor=actor,
+            kind=kind,
+            rationale=rationale,
+            command=command,
+            output=output,
+            exit_code=exit_code,
         )
 
     def event(
@@ -115,6 +141,12 @@ class ProgressTracker:
         tool: Optional[str] = None,
         detail: str = "",
         duration_ms: Optional[int] = None,
+        actor: str = "system",
+        kind: str = "activity",
+        rationale: str = "",
+        command: str = "",
+        output: str = "",
+        exit_code: Optional[int] = None,
     ) -> str:
         with self._lock:
             self._steps += 1
@@ -128,6 +160,12 @@ class ProgressTracker:
             artifact=artifact,
             tool=tool,
             detail=detail,
+            actor=actor,
+            kind=kind,
+            rationale=rationale,
+            command=command,
+            output=output,
+            exit_code=exit_code,
         )
         return step_id
 
@@ -142,6 +180,12 @@ class ProgressTracker:
         artifact: Optional[str] = None,
         tool: Optional[str] = None,
         detail: str = "",
+        actor: str = "system",
+        kind: str = "activity",
+        rationale: str = "",
+        command: str = "",
+        output: str = "",
+        exit_code: Optional[int] = None,
     ) -> None:
         with self._lock:
             self._sequence += 1
@@ -159,6 +203,12 @@ class ProgressTracker:
             artifact=_optional_bounded(artifact, 200),
             tool=_optional_bounded(tool, 80),
             detail=_bounded(detail, 500),
+            actor=_bounded(actor, 20),
+            kind=_bounded(kind, 30),
+            rationale=_bounded(rationale, 1000),
+            command=_bounded(command, 1000),
+            output=_bounded(output, 4000),
+            exit_code=exit_code if isinstance(exit_code, int) else None,
         )
         if self._sink is not None:
             self._sink(event)

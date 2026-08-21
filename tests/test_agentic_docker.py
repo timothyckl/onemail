@@ -94,7 +94,13 @@ class DockerIntegrationTests(unittest.TestCase):
         with sandbox:
             baseline = sandbox.baseline()
             archive = next(item for item in baseline.artifacts if item.id != "email")
-            result = sandbox.execute(Task("archive", archive.id))
+            result = sandbox.execute(
+                Task(
+                    "archive",
+                    archive.id,
+                    rationale="Inspect the archive for bounded child artefacts.",
+                )
+            )
 
         self.assertEqual(len(result.artifacts), 3)
         self.assertTrue(all(item.parent == archive.id for item in result.artifacts))
@@ -106,6 +112,15 @@ class DockerIntegrationTests(unittest.TestCase):
         self.assertTrue(
             any(event.action == "Extract bounded archive members" for event in events)
         )
+        self.assertTrue(
+            any(
+                event.actor == "agent"
+                and event.rationale == "Inspect the archive for bounded child artefacts."
+                for event in events
+            )
+        )
+        self.assertTrue(any(event.command for event in events))
+        self.assertTrue(any(event.output for event in events))
 
     def test_renders_a_pdf_offline(self) -> None:
         sandbox = DockerSandbox(

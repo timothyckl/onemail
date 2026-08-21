@@ -4,7 +4,7 @@ import hashlib
 import time
 from dataclasses import asdict, is_dataclass, replace
 from enum import Enum
-from typing import Callable, Dict, Set, Tuple
+from typing import Callable, Dict, Optional, Set, Tuple
 
 from detection.data_models import FiredResult
 
@@ -25,7 +25,7 @@ from .models import (
     Trace,
 )
 from .policy import Policy
-from .sandbox import Sandbox
+from .sandbox import InvestigationCancelled, Sandbox
 from .tools import TOOLS
 from .virustotal import VirusTotalClient
 
@@ -42,6 +42,7 @@ class Analyzer:
         progress: ProgressTracker | None = None,
         correlator: SQLiteCorrelator | None = None,
         virustotal: VirusTotalClient | None = None,
+        cancelled: Optional[Callable[[], bool]] = None,
     ) -> None:
         self._sandbox = sandbox
         self._agent = agent
@@ -50,8 +51,10 @@ class Analyzer:
         self._progress = progress or ProgressTracker()
         self._correlator = correlator
         self._virustotal = virustotal
+        self._cancelled = cancelled or (lambda: False)
 
     def analyze(self, case: Case) -> Analysis:
+        self._raise_if_cancelled()
         if len(case.email.content) > self._limits.email_bytes:
             raise ValueError("email exceeds analysis size limit")
 
@@ -69,6 +72,18 @@ class Analyzer:
         deadline = time.monotonic() + self._limits.seconds
 
         with self._sandbox(case, self._limits) as sandbox:
+            self._raise_if_cancelled()
+            self._progress.event(
+                "agent_activity",
+                "Establish deterministic evidence baseline",
+                "completed",
+                actor="system",
+                kind="decision",
+                rationale=(
+                    "Extract and inspect the message safely before the agent selects "
+                    "additional analysis tools."
+                ),
+            )
             step = self._progress.start("analysis", "Run deterministic baseline")
             try:
                 analysis = self._merge(analysis, sandbox.baseline())
@@ -107,6 +122,7 @@ class Analyzer:
             )
 
             for round_index in range(self._limits.rounds):
+                self._raise_if_cancelled()
                 remaining_seconds = int(deadline - time.monotonic())
                 if remaining_tasks <= 0 or remaining_seconds <= 0:
                     if remaining_seconds <= 0:
@@ -123,6 +139,7 @@ class Analyzer:
                     seconds=remaining_seconds,
                 )
                 plan = self._agent.plan(analysis, available_tools, round_limits)
+                self._raise_if_cancelled()
                 if time.monotonic() >= deadline:
                     analysis = replace(
                         analysis,
@@ -160,8 +177,20 @@ class Analyzer:
                     + rejected,
                 )
                 if not approved:
+                    self._progress.event(
+                        "agent_activity",
+                        "No additional container analysis selected",
+                        "completed",
+                        actor="agent",
+                        kind="decision",
+                        rationale=(
+                            "; ".join(plan.gaps)
+                            or "The current evidence did not justify another approved tool call."
+                        ),
+                    )
                     break
                 for task in approved:
+                    self._raise_if_cancelled()
                     artifact = next(
                         (item for item in analysis.artifacts if item.id == task.artifact),
                         None,
@@ -172,6 +201,16 @@ class Analyzer:
                         "Check existing VirusTotal file report"
                         if is_virustotal
                         else f"Run {task.name} analysis"
+                    )
+                    self._progress.event(
+                        "agent_activity",
+                        action,
+                        "completed",
+                        artifact=artifact.name if artifact is not None else task.artifact,
+                        tool="VirusTotal" if is_virustotal else task.name,
+                        actor="agent",
+                        kind="decision",
+                        rationale=task.rationale,
                     )
                     task_step = self._progress.start(
                         stage,
@@ -213,9 +252,21 @@ class Analyzer:
                     completed.add((task.name, task.artifact))
                     remaining_tasks -= 1
                 if plan.stop:
+                    self._progress.event(
+                        "agent_activity",
+                        "No further analysis required",
+                        "completed",
+                        actor="agent",
+                        kind="decision",
+                        rationale=(
+                            "The planner requested that the investigation stop after "
+                            "the selected tool calls."
+                        ),
+                    )
                     break
 
         if self._correlator is not None:
+            self._raise_if_cancelled()
             correlation_step = self._progress.start(
                 "correlation", "Compare with prior local investigations",
                 tool="SQLite",
@@ -245,6 +296,10 @@ class Analyzer:
                 )
 
         return analysis
+
+    def _raise_if_cancelled(self) -> None:
+        if self._cancelled():
+            raise InvestigationCancelled("investigation stopped")
 
     @staticmethod
     def _reconcile(case: Case, analysis: Analysis) -> Analysis:

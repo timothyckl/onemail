@@ -21,7 +21,7 @@ from .models import (
     Trace,
 )
 from .policy import Policy
-from .sandbox import DockerSandbox, Sandbox
+from .sandbox import DockerSandbox, InvestigationCancelled, Sandbox
 from .virustotal import VirusTotalClient, VirusTotalConfig
 
 __all__ = [
@@ -35,6 +35,7 @@ __all__ = [
     "Failure",
     "Format",
     "Gap",
+    "InvestigationCancelled",
     "LangChainAgent",
     "Limits",
     "Match",

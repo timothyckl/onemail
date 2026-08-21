@@ -5,10 +5,11 @@ import json
 import os
 import re
 import tempfile
+import threading
 from abc import ABC, abstractmethod
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Callable, Dict, Optional
 
 from agentic import Case
 from agentic.progress import ProgressTracker
@@ -50,6 +51,22 @@ class Sandbox(ABC):
         raise NotImplementedError
 
 
+class InvestigationCancelled(RuntimeError):
+    """Raised when a caller stops an active investigation."""
+
+
+@dataclass(frozen=True)
+class _ActiveContainerEvent:
+    stage: str
+    action: str
+    artifact: Optional[str]
+    tool: Optional[str]
+    step_id: str
+    actor: str
+    rationale: str
+    command: str
+
+
 class DockerSandbox(Sandbox):
     """Run one case in an ephemeral, offline Ubuntu analysis container."""
 
@@ -60,6 +77,9 @@ class DockerSandbox(Sandbox):
         image: str = "onemail-analysis:latest",
         client: Optional[Any] = None,
         progress: Optional[ProgressTracker] = None,
+        cancelled: Optional[Callable[[], bool]] = None,
+        investigation_id: Optional[str] = None,
+        input_path: Optional[Path] = None,
     ) -> None:
         self._owns_client = client is None
         if client is None:
@@ -73,6 +93,9 @@ class DockerSandbox(Sandbox):
         self._image = image
         self._client = client
         self._progress = progress or ProgressTracker()
+        self._cancelled = cancelled or (lambda: False)
+        self._investigation_id = investigation_id
+        self._configured_input_path = input_path
         self._container: Optional[Any] = None
         self._email_path: Optional[Path] = None
         self._image_id: Optional[str] = None
@@ -80,19 +103,26 @@ class DockerSandbox(Sandbox):
         self._trace_ids: set[str] = set()
         self._evidence_ids: set[str] = set()
         self._observation_ids: set[str] = set()
+        self._cleanup_lock = threading.Lock()
 
     def __enter__(self) -> "DockerSandbox":
+        self._raise_if_cancelled()
         memory = max(self._limits.total_bytes * 4, 512 * 1024 * 1024)
         step = self._progress.start(
             "sandbox", "Create isolated analysis container", tool="Docker"
         )
         try:
-            handle = tempfile.NamedTemporaryFile(prefix="onemail-", suffix=".eml", delete=False)
-            try:
-                handle.write(self._case.email.content)
-            finally:
-                handle.close()
-            self._email_path = Path(handle.name)
+            if self._configured_input_path is None:
+                handle = tempfile.NamedTemporaryFile(prefix="onemail-", suffix=".eml", delete=False)
+                try:
+                    handle.write(self._case.email.content)
+                finally:
+                    handle.close()
+                self._email_path = Path(handle.name)
+            else:
+                self._email_path = self._configured_input_path
+                with self._email_path.open("xb") as handle:
+                    handle.write(self._case.email.content)
             os.chmod(self._email_path, 0o444)
             self._image_id = self._client.images.get(self._image).id
             self._container = self._client.containers.run(
@@ -125,8 +155,16 @@ class DockerSandbox(Sandbox):
                         "mode": "ro",
                     }
                 },
-                labels={"onemail.component": "analysis"},
+                labels={
+                    "onemail.component": "analysis",
+                    **(
+                        {"onemail.investigation": self._investigation_id}
+                        if self._investigation_id
+                        else {}
+                    ),
+                },
             )
+            self._raise_if_cancelled()
         except Exception as error:
             cleanup_error = self._cleanup()
             self._progress.finish(
@@ -149,6 +187,13 @@ class DockerSandbox(Sandbox):
         )
         return self
 
+    def stop(self) -> None:
+        """Immediately terminate the container and release its resources."""
+
+        error = self._cleanup()
+        if error is not None:
+            raise RuntimeError("failed to remove analysis container") from error
+
     def __exit__(self, exc_type: object, exc: object, traceback: object) -> None:
         step = self._progress.start(
             "sandbox", "Remove analysis container", tool="Docker"
@@ -170,11 +215,16 @@ class DockerSandbox(Sandbox):
             raise failure from error
 
     def _cleanup(self) -> Optional[Exception]:
-        if self._container is None:
-            input_error = self._remove_input()
-            return input_error or self._close_client()
-        container = self._container
-        self._container = None
+        with self._cleanup_lock:
+            container = self._container
+            self._container = None
+            email_path = self._email_path
+            self._email_path = None
+            owns_client = self._owns_client
+            self._owns_client = False
+        if container is None:
+            input_error = self._remove_input_path(email_path)
+            return input_error or self._close_owned_client(owns_client)
         try:
             container.kill()
         except Exception:
@@ -188,25 +238,23 @@ class DockerSandbox(Sandbox):
             container.remove(force=True)
         except Exception as error:
             removal_error = error
-        input_error = self._remove_input()
-        close_error = self._close_client()
+        input_error = self._remove_input_path(email_path)
+        close_error = self._close_owned_client(owns_client)
         return removal_error or input_error or close_error
 
-    def _remove_input(self) -> Optional[Exception]:
-        if self._email_path is None:
+    @staticmethod
+    def _remove_input_path(path: Optional[Path]) -> Optional[Exception]:
+        if path is None:
             return None
-        path = self._email_path
-        self._email_path = None
         try:
             path.unlink(missing_ok=True)
         except Exception as error:
             return error
         return None
 
-    def _close_client(self) -> Optional[Exception]:
-        if not self._owns_client:
+    def _close_owned_client(self, owns_client: bool) -> Optional[Exception]:
+        if not owns_client:
             return None
-        self._owns_client = False
         try:
             self._client.close()
         except Exception as error:
@@ -214,12 +262,15 @@ class DockerSandbox(Sandbox):
         return None
 
     def baseline(self) -> Batch:
+        self._raise_if_cancelled()
         batch = self._run(
             [
                 "baseline",
                 "/work/message.eml",
                 json.dumps(self._limits.__dict__, sort_keys=True),
-            ]
+            ],
+            actor="system",
+            rationale="",
         )
         email = next((item for item in batch.artifacts if item.id == "email"), None)
         expected = hashlib.sha256(self._case.email.content).hexdigest()
@@ -228,6 +279,7 @@ class DockerSandbox(Sandbox):
         return batch
 
     def execute(self, task: Task) -> Batch:
+        self._raise_if_cancelled()
         return self._run(
             [
                 "task",
@@ -235,10 +287,19 @@ class DockerSandbox(Sandbox):
                 task.artifact,
                 json.dumps(dict(task.options), sort_keys=True),
                 json.dumps(self._limits.__dict__, sort_keys=True),
-            ]
+            ],
+            actor="agent",
+            rationale=task.rationale,
         )
 
-    def _run(self, arguments: list[str]) -> Batch:
+    def _run(
+        self,
+        arguments: list[str],
+        *,
+        actor: str,
+        rationale: str,
+    ) -> Batch:
+        self._raise_if_cancelled()
         if self._container is None:
             raise RuntimeError("sandbox is not running")
         command = ["/opt/venv/bin/python", "/opt/onemail/runner.py"] + arguments
@@ -253,15 +314,13 @@ class DockerSandbox(Sandbox):
         buffer = b""
         messages: list[str] = []
         data: Optional[Dict[str, Any]] = None
-        active: Dict[
-            str,
-            tuple[str, str, Optional[str], Optional[str], str],
-        ] = {}
+        active: Dict[str, _ActiveContainerEvent] = {}
         byte_limit = max(self._limits.output_bytes * 128, 8 * 1024 * 1024)
 
         try:
             try:
                 for chunk in stream:
+                    self._raise_if_cancelled()
                     buffer += (
                         chunk
                         if isinstance(chunk, bytes)
@@ -271,19 +330,37 @@ class DockerSandbox(Sandbox):
                         raise ValueError("sandbox output exceeded its protocol limit")
                     while b"\n" in buffer:
                         raw, buffer = buffer.split(b"\n", 1)
-                        data = self._protocol_line(raw, data, active, messages)
+                        data = self._protocol_line(
+                            raw,
+                            data,
+                            active,
+                            messages,
+                            actor=actor,
+                            rationale=rationale,
+                        )
                 if buffer.strip():
-                    data = self._protocol_line(buffer, data, active, messages)
+                    data = self._protocol_line(
+                        buffer,
+                        data,
+                        active,
+                        messages,
+                        actor=actor,
+                        rationale=rationale,
+                    )
             except Exception as error:
-                for stage, action, artifact, tool, step_id in active.values():
+                for item in active.values():
                     self._progress.finish(
-                        step_id,
-                        stage,
-                        action,
+                        item.step_id,
+                        item.stage,
+                        item.action,
                         status="failed",
-                        artifact=artifact,
-                        tool=tool,
+                        artifact=item.artifact,
+                        tool=item.tool,
                         detail=type(error).__name__,
+                        actor=item.actor,
+                        kind="tool",
+                        rationale=item.rationale,
+                        command=item.command,
                     )
                 active.clear()
                 raise
@@ -295,33 +372,46 @@ class DockerSandbox(Sandbox):
         inspected = self._client.api.exec_inspect(execution_id)
         exit_code = inspected.get("ExitCode") if isinstance(inspected, dict) else None
         if exit_code != 0:
-            for stage, action, artifact, tool, step_id in active.values():
+            for item in active.values():
                 self._progress.finish(
-                    step_id,
-                    stage,
-                    action,
+                    item.step_id,
+                    item.stage,
+                    item.action,
                     status="failed",
-                    artifact=artifact,
-                    tool=tool,
+                    artifact=item.artifact,
+                    tool=item.tool,
                     detail="Container runner stopped unexpectedly",
+                    actor=item.actor,
+                    kind="tool",
+                    rationale=item.rationale,
+                    command=item.command,
+                    exit_code=exit_code if isinstance(exit_code, int) else None,
                 )
             detail = "\n".join(messages)[: self._limits.output_bytes]
             raise RuntimeError(detail or f"sandbox runner exited with code {exit_code}")
         if data is None:
             raise ValueError("sandbox returned no result")
-        for stage, action, artifact, tool, step_id in active.values():
+        for item in active.values():
             self._progress.finish(
-                step_id,
-                stage,
-                action,
+                item.step_id,
+                item.stage,
+                item.action,
                 status="failed",
-                artifact=artifact,
-                tool=tool,
+                artifact=item.artifact,
+                tool=item.tool,
                 detail="Container runner omitted completion event",
+                actor=item.actor,
+                kind="tool",
+                rationale=item.rationale,
+                command=item.command,
             )
         batch = replace(_batch(data), image=self._image_id)
         self._validate(batch)
         return batch
+
+    def _raise_if_cancelled(self) -> None:
+        if self._cancelled():
+            raise InvestigationCancelled("investigation stopped")
 
     def _protocol_line(
         self,
@@ -329,9 +419,12 @@ class DockerSandbox(Sandbox):
         current: Optional[Dict[str, Any]],
         active: Dict[
             str,
-            tuple[str, str, Optional[str], Optional[str], str],
+            _ActiveContainerEvent,
         ],
         messages: list[str],
+        *,
+        actor: str,
+        rationale: str,
     ) -> Optional[Dict[str, Any]]:
         text = raw.decode("utf-8", "replace").strip()
         if not text:
@@ -349,27 +442,54 @@ class DockerSandbox(Sandbox):
             action = str(payload.get("action", "Container activity"))[:120]
             artifact = _optional_text(payload.get("artifact"), 200)
             tool = _optional_text(payload.get("tool"), 80)
+            command = str(payload.get("command", ""))[:1000]
             status = payload.get("status")
             if status == "running":
                 step_id = self._progress.start(
-                    "container", action, artifact=artifact, tool=tool
+                    "container",
+                    action,
+                    artifact=artifact,
+                    tool=tool,
+                    actor=actor,
+                    kind="tool",
+                    rationale=rationale,
+                    command=command,
                 )
-                active[runner_id] = ("container", action, artifact, tool, step_id)
+                active[runner_id] = _ActiveContainerEvent(
+                    stage="container",
+                    action=action,
+                    artifact=artifact,
+                    tool=tool,
+                    step_id=step_id,
+                    actor=actor,
+                    rationale=rationale,
+                    command=command,
+                )
             elif status in {"completed", "failed", "skipped"}:
                 item = active.pop(runner_id, None)
                 duration = payload.get("duration_ms")
                 duration_ms = duration if isinstance(duration, int) and duration >= 0 else None
+                output = str(payload.get("output", ""))[:4000]
+                reported_exit_code = payload.get("exit_code")
+                event_exit_code = (
+                    reported_exit_code if isinstance(reported_exit_code, int) else None
+                )
                 if item is not None:
-                    stage, prior_action, prior_artifact, prior_tool, step_id = item
                     self._progress.finish(
-                        step_id,
-                        stage,
-                        prior_action,
+                        item.step_id,
+                        item.stage,
+                        item.action,
                         status=status,
-                        artifact=prior_artifact,
-                        tool=prior_tool,
+                        artifact=item.artifact,
+                        tool=item.tool,
                         duration_ms=duration_ms,
                         detail=str(payload.get("detail", ""))[:500],
+                        actor=item.actor,
+                        kind="tool",
+                        rationale=item.rationale,
+                        command=item.command or command,
+                        output=output,
+                        exit_code=event_exit_code,
                     )
                 else:
                     self._progress.event(
@@ -380,6 +500,12 @@ class DockerSandbox(Sandbox):
                         tool=tool,
                         duration_ms=duration_ms,
                         detail=str(payload.get("detail", ""))[:500],
+                        actor=actor,
+                        kind="tool",
+                        rationale=rationale,
+                        command=command,
+                        output=output,
+                        exit_code=event_exit_code,
                     )
             else:
                 raise ValueError("sandbox returned an invalid progress status")

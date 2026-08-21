@@ -25,8 +25,9 @@
   <main class="desk">
     <!-- LEFT: intake -->
     <section class="intake">
-      <div class="tabs" role="tablist" aria-label="Intake mode">
+      <div class="tabs" role="tablist" aria-label="OneMail workflow">
         <button class="tab is-active" data-mode="scan" role="tab" aria-selected="true">Scan message</button>
+        <button class="tab" data-mode="agentic" role="tab" aria-selected="false" aria-disabled="true" disabled>Agentic</button>
         <button class="tab" data-mode="preview" role="tab" aria-selected="false">Preview report</button>
       </div>
 
@@ -52,6 +53,11 @@
         </div>
         {% endif %}
         <div id="scan-status" class="status" hidden></div>
+      </div>
+
+      <!-- Populated only after deterministic escalation is triggered. -->
+      <div class="intake-mode" data-mode-view="agentic" hidden>
+        <div id="agentic-context" hidden></div>
       </div>
 
       <!-- preview intake -->
@@ -81,6 +87,9 @@
           <p class="emptystate-sub">Drop an <b>.eml</b> or pick a sample on the left. The verdict, findings and observables appear here.</p>
         </div>
         <div id="scan-result" class="result" hidden></div>
+      </div>
+      <div class="output-mode" data-mode-view="agentic" hidden>
+        <div id="agentic-result" class="result agentic-workspace" hidden></div>
       </div>
       <div class="output-mode" data-mode-view="preview" hidden>
         <div id="preview-empty" class="emptystate">

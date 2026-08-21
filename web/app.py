@@ -18,15 +18,20 @@ Docker daemon; readiness failures are reported without disabling detection.
 from __future__ import annotations
 
 import re
+import multiprocessing
+import queue
 import sys
+import tempfile
 import threading
 import time
 import uuid
 from dataclasses import asdict, is_dataclass
+from email import policy
+from email.parser import BytesParser
 from enum import Enum
 from html.parser import HTMLParser
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from flask import Flask, jsonify, render_template, request
 
@@ -64,6 +69,12 @@ except ModuleNotFoundError as error:  # pragma: no cover - startup guard
         "folder that contains 'detection/'), then run it again."
     ) from error
 from reporting import DetectionRecord, DetectionReport  # noqa: E402
+from web.presentation import (  # noqa: E402
+    present_finding,
+    present_observables,
+    present_skipped,
+    scan_summary as build_scan_summary,
+)
 from agentic.progress import ProgressEvent, ProgressTracker  # noqa: E402
 from agentic.lmstudio import (  # noqa: E402
     analysis_seconds_from_env,
@@ -152,7 +163,7 @@ def _to_jsonable(value: Any) -> Any:
     return value
 
 
-def _observable_summary(observables: Any) -> Dict[str, Any]:
+def _observable_summary(observables: Any, content: bytes) -> Dict[str, Any]:
     """Pull the fields worth showing at a glance from parsed observables."""
 
     hosts = list(observables.url_hosts)
@@ -172,6 +183,11 @@ def _observable_summary(observables: Any) -> Dict[str, Any]:
         "reply_to_differs": observables.reply_to_differs,
         "display_name": observables.display_name,
         "display_name_brand": observables.display_name_brand,
+        "raw_date": observables.raw_date,
+        "body_text": observables.body_text,
+        "has_html": observables.has_html,
+        "has_plain": observables.has_plain,
+        "inline_image_count": observables.inline_image_count,
         "spf_result": observables.spf_result.value if observables.spf_result else None,
         "dmarc_result": (
             observables.dmarc_result.value if observables.dmarc_result else None
@@ -185,6 +201,7 @@ def _observable_summary(observables: Any) -> Dict[str, Any]:
         "mime_depth": observables.mime_depth,
         "received_count": observables.received_count,
         "parse_error": observables.parse_error,
+        **_message_body_presentation(content),
     }
 
 
@@ -197,18 +214,26 @@ def scan_bytes(name: str, content: bytes) -> Dict[str, Any]:
         [DetectionRecord.detected("uploaded", detection)]
     )
 
-    findings = [
-        {
-            "detector": finding.detector.value,
-            "severity": finding.severity.value,
-            "heuristic": finding.heuristic,
-            "clause": finding.clause,
-            "evidence": _to_jsonable(finding.evidence),
-        }
-        for finding in detection.findings
-    ]
+    findings = []
+    for finding in detection.findings:
+        evidence = _to_jsonable(finding.evidence)
+        findings.append(
+            {
+                "detector": finding.detector.value,
+                "severity": finding.severity.value,
+                "heuristic": finding.heuristic,
+                "clause": finding.clause,
+                "evidence": evidence,
+                "presentation": present_finding(
+                    finding.detector,
+                    finding.severity.value,
+                    finding.heuristic,
+                    evidence,
+                ),
+            }
+        )
     skipped = [
-        {"detector": result.detector.value, "reason": result.reason}
+        present_skipped(result.detector, result.reason)
         for result in detection.skipped
     ]
     clear = [
@@ -227,7 +252,12 @@ def scan_bytes(name: str, content: bytes) -> Dict[str, Any]:
         "skipped": skipped,
         "clear": clear,
         "detector_total": len(detection.detector_results),
-        "observables": _observable_summary(detection.observables),
+        "scan_summary": build_scan_summary(findings),
+        "observables": _observable_summary(detection.observables, content),
+        "observable_sections": present_observables(
+            detection.observables,
+            (finding.detector for finding in detection.findings),
+        ),
         "validation_issues": len(report.validation_issues),
         "report": report.to_dict(),
     }
@@ -299,6 +329,114 @@ class _Sanitizer(HTMLParser):
 
     def result(self) -> str:
         return "".join(self.out)
+
+
+_MESSAGE_BODY_LIMIT = 200_000
+_MESSAGE_BODY_TAGS = {
+    "h1", "h2", "h3", "h4", "h5", "h6", "p", "ul", "ol", "li",
+    "blockquote", "pre", "code", "strong", "em", "b", "i", "u", "del",
+    "hr", "br", "table", "thead", "tbody", "tr", "th", "td", "div",
+    "section", "article", "header", "footer", "label", "small", "sub", "sup",
+}
+_MESSAGE_BODY_DROP_CONTENT_TAGS = {
+    "script", "style", "head", "title", "template", "noscript", "iframe",
+    "object", "embed", "svg", "canvas",
+}
+
+
+class _MessageBodySanitizer(HTMLParser):
+    """Preserve inert message formatting without retaining active HTML."""
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.out: List[str] = []
+        self._suppress_depth = 0
+
+    def handle_starttag(self, tag: str, attrs: List[Tuple[str, Optional[str]]]) -> None:
+        if tag in _MESSAGE_BODY_DROP_CONTENT_TAGS:
+            self._suppress_depth += 1
+            return
+        if self._suppress_depth:
+            return
+        if tag == "a":
+            self.out.append('<span class="email-link">')
+        elif tag == "form":
+            self.out.append('<div class="email-form">')
+        elif tag == "input":
+            self.out.append('<span class="email-input-placeholder" aria-hidden="true"></span>')
+        elif tag == "img":
+            self.out.append('<span class="email-image-placeholder">[Image not loaded]</span>')
+        elif tag in _MESSAGE_BODY_TAGS:
+            self.out.append(f"<{tag}>")
+
+    def handle_startendtag(
+        self, tag: str, attrs: List[Tuple[str, Optional[str]]]
+    ) -> None:
+        self.handle_starttag(tag, attrs)
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag in _MESSAGE_BODY_DROP_CONTENT_TAGS:
+            self._suppress_depth = max(self._suppress_depth - 1, 0)
+            return
+        if self._suppress_depth:
+            return
+        if tag == "a":
+            self.out.append("</span>")
+        elif tag == "form":
+            self.out.append("</div>")
+        elif tag in _MESSAGE_BODY_TAGS and tag not in {"br", "hr"}:
+            self.out.append(f"</{tag}>")
+
+    def handle_data(self, data: str) -> None:
+        if not self._suppress_depth:
+            self.out.append(_Sanitizer._escape(data))
+
+    def result(self) -> str:
+        return "".join(self.out).strip()
+
+
+def _message_body_presentation(content: bytes) -> Dict[str, Optional[str]]:
+    """Extract one preferred MIME body for the analyst-facing message preview."""
+
+    empty = {
+        "presentation_body_format": None,
+        "presentation_body_text": None,
+        "presentation_body_html": None,
+    }
+    try:
+        message = BytesParser(policy=policy.default).parsebytes(content)
+        part = message.get_body(preferencelist=("html", "plain"))
+        if part is None and message.get_content_maintype() == "text":
+            part = message
+        if part is None:
+            return empty
+        try:
+            body = part.get_content()
+        except Exception:
+            payload = part.get_payload(decode=True)
+            if payload is None:
+                return empty
+            body = payload.decode(part.get_content_charset() or "utf-8", "replace")
+        if not isinstance(body, str):
+            return empty
+    except Exception:
+        return empty
+
+    body = body[:_MESSAGE_BODY_LIMIT]
+    if part.get_content_type().lower() == "text/html":
+        sanitizer = _MessageBodySanitizer()
+        sanitizer.feed(body)
+        sanitizer.close()
+        return {
+            "presentation_body_format": "html",
+            "presentation_body_text": None,
+            "presentation_body_html": sanitizer.result(),
+        }
+    return {
+        "presentation_body_format": "plain",
+        "presentation_body_text": body,
+        "presentation_body_html": None,
+    }
 
 
 def _fallback_markdown(text: str) -> str:
@@ -445,8 +583,11 @@ class _InvestigationJob:
         self.result: Optional[Dict[str, Any]] = None
         self.created = time.monotonic()
         self.finished: Optional[float] = None
+        self.input_path = Path(tempfile.gettempdir()) / f"onemail-{self.id}.eml"
         self._events: List[Dict[str, object]] = []
         self._lock = threading.Lock()
+        self._process: Optional[multiprocessing.Process] = None
+        self._pipeline_step: Optional[str] = None
         self.progress = ProgressTracker(self._record)
         self.progress.event("pipeline", "Investigation queued", "queued")
 
@@ -457,16 +598,21 @@ class _InvestigationJob:
 
     def start(self) -> None:
         with self._lock:
-            self.status = "running"
+            if self.status == "queued":
+                self.status = "running"
 
     def complete(self, result: Dict[str, Any]) -> None:
         with self._lock:
+            if self.status == "cancelled":
+                return
             self.result = result
             self.status = "completed" if result.get("ok") else "failed"
             self.finished = time.monotonic()
 
     def fail(self, error: BaseException) -> None:
         with self._lock:
+            if self.status == "cancelled":
+                return
             self.result = {
                 "ok": False,
                 "flagged": True,
@@ -475,6 +621,67 @@ class _InvestigationJob:
             }
             self.status = "failed"
             self.finished = time.monotonic()
+
+    def attach_process(self, process: multiprocessing.Process) -> None:
+        with self._lock:
+            self._process = process
+
+    def attach_pipeline_step(self, step_id: str) -> None:
+        with self._lock:
+            self._pipeline_step = step_id
+
+    def is_cancelled(self) -> bool:
+        with self._lock:
+            return self.status == "cancelled"
+
+    def record_worker_event(self, event: Dict[str, object]) -> None:
+        event = dict(event)
+        event["step_id"] = "worker-" + str(event.get("step_id", "event"))
+        with self._lock:
+            if len(self._events) < MAX_PROGRESS_EVENTS:
+                self._events.append(event)
+
+    def cancel(self) -> bool:
+        with self._lock:
+            if self.status not in {"queued", "running"}:
+                return False
+            self.status = "cancelled"
+            self.result = {
+                "ok": False,
+                "cancelled": True,
+                "flagged": True,
+                "file": self.name,
+                "note": "Investigation stopped and its analysis container was terminated.",
+            }
+            self.finished = time.monotonic()
+            process = self._process
+            pipeline_step = self._pipeline_step
+        if process is not None and process.is_alive():
+            process.terminate()
+            process.join(timeout=5)
+            if process.is_alive():
+                process.kill()
+                process.join(timeout=5)
+        if pipeline_step is not None:
+            self.progress.finish(
+                pipeline_step,
+                "pipeline",
+                "Run agentic investigation",
+                status="failed",
+                detail="Stopped by user",
+            )
+        self.progress.event(
+            "pipeline",
+            "Investigation stopped",
+            "failed",
+            detail="Stopped by user",
+        )
+        cleanup_error = _cleanup_investigation_resources(self.id, self.input_path)
+        if cleanup_error is not None:
+            with self._lock:
+                assert self.result is not None
+                self.result["error"] = cleanup_error
+        return True
 
     def snapshot(self) -> Dict[str, Any]:
         with self._lock:
@@ -490,6 +697,81 @@ class _InvestigationJob:
 
 _JOBS: Dict[str, _InvestigationJob] = {}
 _JOBS_LOCK = threading.Lock()
+_PROCESS_CONTEXT = multiprocessing.get_context("spawn")
+
+
+def _investigation_worker(
+    name: str,
+    content: bytes,
+    identifier: str,
+    input_path: str,
+    messages: Any,
+) -> None:
+    """Run the whole investigation in a terminable child process."""
+
+    def emit(event: ProgressEvent) -> None:
+        messages.put({"kind": "event", "event": event.to_dict()})
+
+    try:
+        result = investigate_bytes(
+            name,
+            content,
+            progress=ProgressTracker(emit),
+            investigation_id=identifier,
+            input_path=Path(input_path),
+        )
+    except BaseException as error:
+        messages.put(
+            {
+                "kind": "error",
+                "error": f"{type(error).__name__}: {error}",
+            }
+        )
+    else:
+        messages.put({"kind": "result", "result": result})
+
+
+def _cleanup_investigation_resources(
+    identifier: str,
+    input_path: Path,
+) -> Optional[str]:
+    """Remove resources that survive forced child-process termination."""
+
+    errors: List[str] = []
+    client = None
+    try:
+        if importlib.util.find_spec("docker") is not None:
+            import docker
+
+            client = docker.from_env(timeout=5)
+            containers = client.containers.list(
+                all=True,
+                filters={"label": f"onemail.investigation={identifier}"},
+            )
+            for container in containers:
+                try:
+                    container.kill()
+                except Exception:
+                    pass
+                try:
+                    container.remove(force=True)
+                except Exception as error:
+                    errors.append(f"container removal failed: {type(error).__name__}: {error}")
+    except Exception as error:
+        errors.append(f"container cleanup failed: {type(error).__name__}: {error}")
+    finally:
+        if client is not None:
+            try:
+                client.close()
+            except Exception:
+                pass
+    try:
+        input_path.unlink(missing_ok=True)
+    except Exception as error:
+        errors.append(f"input cleanup failed: {type(error).__name__}: {error}")
+    if errors:
+        return "Investigation stopped, but resource cleanup reported: " + "; ".join(errors)
+    return None
 
 
 def _discard_expired_jobs() -> None:
@@ -510,21 +792,70 @@ def _start_investigation(name: str, content: bytes) -> _InvestigationJob:
     with _JOBS_LOCK:
         _JOBS[job.id] = job
 
-    def run() -> None:
-        job.start()
-        step = job.progress.start("pipeline", "Run agentic investigation")
-        try:
-            result = investigate_bytes(name, content, progress=job.progress)
-        except BaseException as error:
-            job.progress.finish(
-                step,
-                "pipeline",
-                "Run agentic investigation",
-                status="failed",
-                detail=type(error).__name__,
-            )
-            job.fail(error)
-            return
+    messages = _PROCESS_CONTEXT.Queue()
+    process = _PROCESS_CONTEXT.Process(
+        target=_investigation_worker,
+        args=(name, content, job.id, str(job.input_path), messages),
+        daemon=True,
+        name=f"onemail-worker-{job.id[:8]}",
+    )
+    job.attach_process(process)
+    job.start()
+    step = job.progress.start("pipeline", "Run agentic investigation")
+    job.attach_pipeline_step(step)
+    try:
+        process.start()
+    except BaseException as error:
+        job.progress.finish(
+            step,
+            "pipeline",
+            "Run agentic investigation",
+            status="failed",
+            detail=type(error).__name__,
+        )
+        job.fail(error)
+        return job
+
+    def monitor() -> None:
+        result_received = False
+        while process.is_alive():
+            try:
+                message = messages.get(timeout=0.1)
+            except queue.Empty:
+                continue
+            result_received = _handle_worker_message(job, step, message) or result_received
+        process.join()
+        while True:
+            try:
+                message = messages.get_nowait()
+            except queue.Empty:
+                break
+            result_received = _handle_worker_message(job, step, message) or result_received
+        if not result_received:
+            job.fail(RuntimeError(f"investigation worker exited with code {process.exitcode}"))
+        messages.close()
+
+    threading.Thread(
+        target=monitor,
+        daemon=True,
+        name=f"onemail-monitor-{job.id[:8]}",
+    ).start()
+    return job
+
+
+def _handle_worker_message(
+    job: _InvestigationJob,
+    step: str,
+    message: Dict[str, Any],
+) -> bool:
+    if job.is_cancelled():
+        return message.get("kind") in {"result", "error"}
+    kind = message.get("kind")
+    if kind == "event" and isinstance(message.get("event"), dict):
+        job.record_worker_event(message["event"])
+        return False
+    if kind == "result" and isinstance(message.get("result"), dict):
+        result = message["result"]
         job.progress.finish(
             step,
             "pipeline",
@@ -533,9 +864,19 @@ def _start_investigation(name: str, content: bytes) -> _InvestigationJob:
             detail="Investigation complete" if result.get("ok") else "Investigation failed",
         )
         job.complete(result)
-
-    threading.Thread(target=run, daemon=True, name=f"onemail-{job.id[:8]}").start()
-    return job
+        return True
+    if kind == "error":
+        error = RuntimeError(str(message.get("error") or "unknown worker failure"))
+        job.progress.finish(
+            step,
+            "pipeline",
+            "Run agentic investigation",
+            status="failed",
+            detail="Worker failed",
+        )
+        job.fail(error)
+        return True
+    return False
 
 
 def _job(identifier: str) -> Optional[_InvestigationJob]:
@@ -616,10 +957,23 @@ def investigate_bytes(
     name: str,
     content: bytes,
     progress: Optional[ProgressTracker] = None,
+    cancelled: Optional[Callable[[], bool]] = None,
+    register_teardown: Optional[Callable[[Callable[[], None]], None]] = None,
+    investigation_id: Optional[str] = None,
+    input_path: Optional[Path] = None,
 ) -> Dict[str, Any]:
     """Run detection, then the LM Studio + Docker investigation if flagged."""
 
+    from agentic.analysis import InvestigationCancelled
+
     progress = progress or ProgressTracker()
+    cancelled = cancelled or (lambda: False)
+
+    def ensure_running() -> None:
+        if cancelled():
+            raise InvestigationCancelled("investigation stopped")
+
+    ensure_running()
     detection_step = progress.start("detection", "Run deterministic detection")
     email = Email(file=name, content=content)
     detection = ENGINE.detect(email)
@@ -629,6 +983,7 @@ def investigate_bytes(
         "Run deterministic detection",
         detail=f"{len(detection.findings)} finding(s)",
     )
+    ensure_running()
 
     if not detection.flagged:
         return {
@@ -680,6 +1035,7 @@ def investigate_bytes(
         }
 
     try:
+        ensure_running()
         model_step = progress.start("model", "Initialise LM Studio clients")
         planner_config = role_config(LMSTUDIO, "planner")
         reporter_config = role_config(LMSTUDIO, "reporter")
@@ -694,13 +1050,25 @@ def investigate_bytes(
                 f"reporter reasoning: {reporter_config.reasoning_effort}"
             ),
         )
+        ensure_running()
         case_step = progress.start("pipeline", "Validate investigation case")
         case = Case(email=email, detection=detection)
         progress.finish(case_step, "pipeline", "Validate investigation case")
+        def create_sandbox(item, limits):
+            sandbox = DockerSandbox(
+                item,
+                limits,
+                progress=progress,
+                cancelled=cancelled,
+                investigation_id=investigation_id,
+                input_path=input_path,
+            )
+            if register_teardown is not None:
+                register_teardown(sandbox.stop)
+            return sandbox
+
         analysis = Analyzer(
-            sandbox=lambda item, limits: DockerSandbox(
-                item, limits, progress=progress
-            ),
+            sandbox=create_sandbox,
             agent=LangChainAgent(
                 planner_model,
                 timeout=planner_config.timeout,
@@ -711,7 +1079,9 @@ def investigate_bytes(
             progress=progress,
             correlator=SQLiteCorrelator.from_env(),
             virustotal=VirusTotalClient.from_env(),
+            cancelled=cancelled,
         ).analyze(case)
+        ensure_running()
         report = Reporter(
             reporter_model,
             name=LMSTUDIO.model,
@@ -719,10 +1089,13 @@ def investigate_bytes(
             structured_output_method="json_schema",
             progress=progress,
         ).report(analysis)
+        ensure_running()
         render_step = progress.start("reporting", "Render intelligence report")
         markdown = Renderer().render(report)
         report_json = report.model_dump(mode="json")
         progress.finish(render_step, "reporting", "Render intelligence report")
+    except InvestigationCancelled:
+        raise
     except Exception as error:
         return {
             "ok": False,
@@ -832,6 +1205,19 @@ def api_investigation_status(identifier: str):
     job = _job(identifier)
     if job is None:
         return _bad_request("Investigation job was not found or has expired.", 404)
+    return jsonify({"ok": True, "job": job.snapshot()})
+
+
+@app.post("/api/investigate/<identifier>/stop")
+def api_stop_investigation(identifier: str):
+    rejected = _require_investigation_request()
+    if rejected is not None:
+        return rejected
+    job = _job(identifier)
+    if job is None:
+        return _bad_request("Investigation job was not found or has expired.", 404)
+    if not job.cancel():
+        return _bad_request("Investigation is no longer running.", 409)
     return jsonify({"ok": True, "job": job.snapshot()})
 
 
