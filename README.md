@@ -296,6 +296,21 @@ OneMail requires Python 3.10 or newer. `requirements.txt` contains the same
 runtime dependency constraints for environments that do not use editable
 installs.
 
+## Claude Code handoff
+
+This repository includes a project-scoped Claude Code skill at
+`.claude/skills/handoff/SKILL.md`. From a Claude Code session started in this
+repository, invoke:
+
+```text
+/handoff
+```
+
+The command loads an operational briefing covering OneMail's architecture,
+deterministic verdict boundary, dependencies, local setup, configuration,
+runnable workflows, verification commands, and security constraints. It is
+manual-only and does not modify the repository when invoked.
+
 ## Tests
 
 The corpus tests use the checked-out Phishing Pot samples directly and enforce
